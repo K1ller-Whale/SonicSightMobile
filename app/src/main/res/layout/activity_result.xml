@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#121212"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- HEADER -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Analysis Results"
+            android:textColor="#FFFFFF"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- 1. HEATMAP (Zoomable) -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Heatmap Overlay"
+            android:textColor="#AAAAAA"/>
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="300dp"
+            app:cardCornerRadius="12dp"
+            android:layout_marginTop="8dp">
+
+            <com.jsibbold.zoomage.ZoomageView
+                android:id="@+id/imgHeatmap"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                app:zoomage_restrictBounds="false"
+                app:zoomage_animateOnReset="true"
+                app:zoomage_autoResetMode="UNDER"
+                app:zoomage_autoCenter="true"
+                app:zoomage_zoomable="true"
+                app:zoomage_translatable="true"
+                app:zoomage_minScale="0.6"
+                app:zoomage_maxScale="8.0" />
+        </androidx.cardview.widget.CardView>
+
+        <!-- 2. SEPARATED AUDIO -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Separated Audio Sources"
+            android:textColor="#AAAAAA"
+            android:layout_marginTop="24dp"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/btnPlaySource1"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Play Source A"
+                android:backgroundTint="#6200EE"
+                android:layout_marginEnd="8dp"/>
+
+            <Button
+                android:id="@+id/btnPlaySource2"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Play Source B"
+                android:backgroundTint="#03DAC6"
+                android:textColor="#000000"/>
+        </LinearLayout>
+
+        <!-- 3. INPUT VIDEOS (Toggle Raw/Processed) -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Input Video"
+            android:textColor="#AAAAAA"
+            android:layout_marginTop="24dp"/>
+
+        <com.google.android.material.button.MaterialButtonToggleGroup
+            android:id="@+id/toggleVideoType"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:singleSelection="true"
+            app:checkedButton="@id/btnRawVideo"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/btnRawVideo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Original"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
+            <Button
+                android:id="@+id/btnProcessedVideo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Processed"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+        </com.google.android.material.button.MaterialButtonToggleGroup>
+
+        <androidx.media3.ui.PlayerView
+            android:id="@+id/videoPlayer"
+            android:layout_width="match_parent"
+            android:layout_height="250dp"
+            android:layout_marginTop="8dp"
+            app:resize_mode="fit"/>
+
+    </LinearLayout>
+</ScrollView>
