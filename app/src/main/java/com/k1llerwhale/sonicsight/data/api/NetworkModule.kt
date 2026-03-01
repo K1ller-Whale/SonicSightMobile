@@ -11,7 +11,7 @@ object NetworkModule {
     // TODO: STEP 1 - ENTER YOUR BACKEND URL HERE
     // If testing on Emulator, use "http://10.0.2.2:8000/"
     // If testing on Real Device, use your PC's local IP: "http://192.168.1.X:8000/"
-    private const val BASE_URL = "http://10.150.75.187:8000/"
+    private const val BASE_URL = "http://192.168.69.187:8000/"
 
     private val client by lazy {
         val logging = HttpLoggingInterceptor().apply {

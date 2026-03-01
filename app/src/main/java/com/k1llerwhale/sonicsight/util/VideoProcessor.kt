@@ -34,7 +34,6 @@ object VideoProcessor {
 
         cmdList.add(outputFile.absolutePath)
 
-        // --- FIX 1: Convert ArrayList to Array ---
         val session = FFmpegKit.executeWithArguments(cmdList.toTypedArray())
 
         if (ReturnCode.isSuccess(session.returnCode)) {
@@ -64,8 +63,6 @@ object VideoProcessor {
 
         val streams = info.streams
         for (stream in streams) {
-            // --- FIX 2: Safe Property Access ---
-            // 'stream.allProperties' returns a JSONObject containing all metadata
             val props = stream.allProperties
 
             if (stream.type == "audio") {

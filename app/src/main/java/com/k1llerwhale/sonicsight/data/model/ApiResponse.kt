@@ -3,16 +3,20 @@ package com.k1llerwhale.sonicsight.data.model
 import com.google.gson.annotations.SerializedName
 
 data class PredictionResponse(
+    // The backend snippet you showed didn't include "status",
+    // so we make it nullable just in case it's missing.
     @SerializedName("status")
-    val status: String,
+    val status: String? = null,
 
-    @SerializedName("heatmap_base64")
+    // MATCH THE PYTHON KEY EXACTLY
+    @SerializedName("heatmap_image")
     val heatmapBase64: String,
 
-    // UPDATE: We now expect two separate audio sources
-    @SerializedName("audio_base64_1")
+    // MATCH THE PYTHON KEY EXACTLY
+    @SerializedName("left_audio")
     val audioBase64Num1: String,
 
-    @SerializedName("audio_base64_2")
+    // MATCH THE PYTHON KEY EXACTLY
+    @SerializedName("right_audio")
     val audioBase64Num2: String
 )
