@@ -69,7 +69,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Play Source A"
+                android:text="Play Left"
                 android:backgroundTint="#6200EE"
                 android:layout_marginEnd="8dp"/>
 
@@ -78,7 +78,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Play Source B"
+                android:text="Play Right"
                 android:backgroundTint="#03DAC6"
                 android:textColor="#000000"/>
         </LinearLayout>

@@ -2,6 +2,7 @@ package com.k1llerwhale.sonicsight.data.model
 
 import com.google.gson.annotations.SerializedName
 
+@Deprecated("Replaced by gRPC InferenceResult")
 data class PredictionResponse(
     // The backend snippet you showed didn't include "status",
     // so we make it nullable just in case it's missing.

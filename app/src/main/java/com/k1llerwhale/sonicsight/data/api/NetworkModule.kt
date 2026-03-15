@@ -6,6 +6,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
+@Deprecated("Replaced by GrpcModule")
 object NetworkModule {
 
     // TODO: STEP 1 - ENTER YOUR BACKEND URL HERE

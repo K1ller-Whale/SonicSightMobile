@@ -19,7 +19,6 @@ import com.k1llerwhale.sonicsight.databinding.ActivityMainBinding
 import com.k1llerwhale.sonicsight.presentation.viewmodel.MainViewModel
 import com.k1llerwhale.sonicsight.presentation.viewmodel.UiState
 import com.k1llerwhale.sonicsight.util.MediaUtils
-import com.k1llerwhale.sonicsight.util.VideoProcessor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -40,7 +39,6 @@ class MainActivity : AppCompatActivity() {
 
     // File Tracking (To pass to ResultActivity)
     private var currentRawFile: File? = null
-    private var currentProcessedFile: File? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,11 +74,11 @@ class MainActivity : AppCompatActivity() {
                 is UiState.Processing -> {
                     binding.progressBar.visibility = View.VISIBLE
                     binding.btnRecord.isEnabled = false
-                    binding.tvStatus.text = "Compressing Video..."
+                    binding.tvStatus.text = "Preparing Video..."
                 }
                 is UiState.Uploading -> {
                     binding.progressBar.visibility = View.VISIBLE
-                    binding.tvStatus.text = "Uploading to AI..."
+                    binding.tvStatus.text = "Streaming to AI..."
                 }
                 is UiState.NavigationReady -> {
                     binding.progressBar.visibility = View.GONE
@@ -89,17 +87,17 @@ class MainActivity : AppCompatActivity() {
                     binding.tvStatus.text = "✅ Done! Opening Results."
 
                     // TRIGGER NAVIGATION
-                    if (currentRawFile != null && currentProcessedFile != null) {
+                    if (currentRawFile != null) {
                         ResultActivity.start(
                             context = this,
                             rawVideo = currentRawFile!!,
-                            processedVideo = currentProcessedFile!!,
+                            processedVideo = currentRawFile!!, // Fallback to raw since mobile processing is removed
                             heatmap = state.heatmapFile,
                             audio1 = state.audio1File,
                             audio2 = state.audio2File
                         )
                     } else {
-                        Toast.makeText(this, "Error: Missing video files", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Error: Missing video file", Toast.LENGTH_SHORT).show()
                     }
 
                     // Reset state after navigation so we don't navigate again on rotation
@@ -210,28 +208,13 @@ class MainActivity : AppCompatActivity() {
         viewModel.setProcessing()
 
         CoroutineScope(Dispatchers.IO).launch {
-            // Optional: Save RAW to gallery
+            // Optional: Save RAW to gallery for debugging
             MediaUtils.saveVideoToGallery(applicationContext, rawFile, "RAW")
 
-            // Run FFmpeg
-            val processedFile = VideoProcessor.compressVideo(rawFile, cacheDir)
-
-            // Track the processed file
-            currentProcessedFile = processedFile
-
-            // Optional: Save PROCESSED to gallery
-            if (processedFile != null) {
-                MediaUtils.saveVideoToGallery(applicationContext, processedFile, "PROCESSED")
-            }
-
             withContext(Dispatchers.Main) {
-                if (processedFile != null) {
-                    // Trigger Phase C (Upload) via ViewModel
-                    viewModel.uploadToBackend(processedFile)
-                } else {
-                    binding.tvStatus.text = "❌ Processing Failed (FFmpeg Error)"
-                    viewModel.resetState()
-                }
+                // Trigger gRPC Upload via ViewModel
+                // We send the raw file directly; the server handles FFmpeg now.
+                viewModel.uploadToBackend(rawFile)
             }
         }
     }

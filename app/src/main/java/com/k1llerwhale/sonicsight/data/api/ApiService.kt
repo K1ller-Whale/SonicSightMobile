@@ -7,6 +7,7 @@ import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.Part
 
+@Deprecated("Replaced by gRPC implementation in GrpcModule")
 interface ApiService {
     @Multipart
     @POST("predict")

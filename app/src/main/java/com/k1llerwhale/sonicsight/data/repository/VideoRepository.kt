@@ -7,6 +7,7 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
 
+@Deprecated("Replaced by GrpcVideoRepository")
 class VideoRepository {
 
     suspend fun uploadVideo(videoFile: File): Result<PredictionResponse> {

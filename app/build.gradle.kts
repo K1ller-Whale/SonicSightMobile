@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.protobuf)
 }
 
 android {
@@ -59,8 +60,6 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
     implementation("androidx.camera:camera-extensions:$cameraxVersion")
 
-    //FFmpeg
-    implementation("com.moizhassan.ffmpeg:ffmpeg-kit-16kb:6.1.1")
     //Coroutines for background processing
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
@@ -80,4 +79,42 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.2.0")
     implementation("androidx.media3:media3-ui:1.2.0")
     implementation("androidx.media3:media3-common:1.2.0")
+
+    // gRPC & Protobuf
+    implementation(libs.grpc.okhttp)
+    implementation(libs.grpc.protobuf.lite)
+    implementation(libs.grpc.stub)
+    implementation(libs.grpc.kotlin.stub)
+    implementation(libs.protobuf.kotlin.lite)
+}
+
+protobuf {
+    protoc {
+        artifact = libs.protobuf.protoc.get().toString()
+    }
+    plugins {
+        register("grpc") {
+            artifact = libs.grpc.gen.java.get().toString()
+        }
+        register("grpckt") {
+            artifact = libs.grpc.gen.kotlin.get().toString()
+        }
+    }
+    generateProtoTasks {
+        all().forEach {
+            it.plugins {
+                register("grpc") {
+                    option("lite")
+                }
+                register("grpckt") {
+                    option("lite")
+                }
+            }
+            it.builtins {
+                register("kotlin") {
+                    option("lite")
+                }
+            }
+        }
+    }
 }
