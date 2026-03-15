@@ -15,7 +15,7 @@ object GrpcModule {
             .usePlaintext() // Use insecure connection for development
             .maxInboundMessageSize(16 * 1024 * 1024) // 16MB
             .keepAliveTime(30, TimeUnit.SECONDS)
-            .defaultCompression(grpc.Gzip.name()) // Enable Gzip
+            .defaultCompression("gzip") // Enable Gzip
             .build()
     }
 
