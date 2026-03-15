@@ -3,7 +3,6 @@ syntax = "proto3";
 package sonicsight;
 
 option java_package = "com.k1llerwhale.sonicsight.grpc";
-option java_outer_classname = "SonicSightProto";
 option java_multiple_files = true;
 
 // ──────────────────────────────────────────────
@@ -13,7 +12,12 @@ service SonicSightService {
   // Client streams raw video chunks → server returns inference results
   rpc ProcessVideo (stream VideoChunk) returns (InferenceResult);
 
-  // Health check (replaces GET /)
+  // Bidirectional streaming for near real-time processing
+  // Client streams continuous raw frames + audio
+  // Server streams back continuous separated audio + heatmaps
+  rpc StreamProcess (stream StreamChunk) returns (stream StreamResult);
+
+  // Health check
   rpc HealthCheck (Empty) returns (HealthResponse);
 }
 
@@ -80,4 +84,53 @@ message InferenceResult {
 
   // Processing time in milliseconds
   int64 processing_time_ms = 10;
+}
+
+// Sent by mobile client continuously as a stream
+message StreamChunk {
+  // Timestamp in milliseconds (relative to start of recording)
+  // Used for syncing audio and video
+  int64 timestamp_ms = 1;
+
+  // Raw JPEG-encoded video frame
+  // Optional: A chunk might contain only audio
+  bytes jpeg_frame = 2;
+
+  // Frame width and height (required if jpeg_frame is present)
+  int32 frame_width = 3;
+  int32 frame_height = 4;
+
+  // Raw PCM audio chunk (16-bit signed, mono)
+  // Required: Sample rate must be 11025 Hz
+  bytes audio_pcm = 5;
+
+  // True for the final chunk in the stream
+  bool is_last = 6;
+}
+
+// Returned by server continuously as a stream
+message StreamResult {
+  // Processing status
+  bool success = 1;
+  string error_message = 2;
+
+  // Timestamp of the center frame this result corresponds to
+  int64 timestamp_ms = 3;
+
+  // Separated audio chunk corresponding to this timestep (raw PCM bytes, 16-bit signed, 11025Hz, mono)
+  // This will be a small chunk (e.g., 0.1s to 0.5s of audio) to be played immediately
+  bytes left_audio_pcm = 4;
+  bytes right_audio_pcm = 5;
+
+  // Heatmap masks as raw float32 arrays
+  // Shape: [IMG_SIZE x IMG_SIZE] = [224 x 224] = 50176 float32 values
+  bytes left_heatmap = 6;
+  bytes right_heatmap = 7;
+
+  // The center frame for overlay (JPEG-encoded)
+  // Sent back so the client doesn't need to buffer frames locally for overlaying
+  bytes center_frame_jpeg = 8;
+
+  // Indicates if this is just a buffering acknowledgment (no results yet)
+  bool is_buffering = 9;
 }

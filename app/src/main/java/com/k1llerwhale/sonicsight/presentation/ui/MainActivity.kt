@@ -1,7 +1,18 @@
 package com.k1llerwhale.sonicsight.presentation.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.CountDownTimer
 import android.util.Log
@@ -11,21 +22,26 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.video.*
 import androidx.core.content.ContextCompat
+import com.google.protobuf.ByteString
 import com.k1llerwhale.sonicsight.databinding.ActivityMainBinding
+import com.k1llerwhale.sonicsight.grpc.StreamChunk
 import com.k1llerwhale.sonicsight.presentation.viewmodel.MainViewModel
 import com.k1llerwhale.sonicsight.presentation.viewmodel.UiState
-import com.k1llerwhale.sonicsight.util.MediaUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
@@ -33,24 +49,36 @@ class MainActivity : AppCompatActivity() {
     private val viewModel: MainViewModel by viewModels()
 
     // CameraX variables
-    private var videoCapture: VideoCapture<Recorder>? = null
-    private var recording: Recording? = null
+    private lateinit var cameraExecutor: ExecutorService
     private var isRecording = false
+    private var recordingStartTime = 0L
 
-    // File Tracking (To pass to ResultActivity)
-    private var currentRawFile: File? = null
+    // Audio variables
+    private var audioRecord: AudioRecord? = null
+    private var audioJob: Job? = null
+    private val SAMPLE_RATE = 11025
+    private val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
+    private val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+
+    // Audio Playback
+    private var audioTrackLeft: AudioTrack? = null
+    private var audioTrackRight: AudioTrack? = null
+    private var playbackJobLeft: Job? = null
+    private var playbackJobRight: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        cameraExecutor = Executors.newSingleThreadExecutor()
+
         // 1. Observe ViewModel State
         observeUiState()
 
-        // 2. Check Permissions & Start Camera
+        // 2. Check Permissions & Start Camera Preview
         if (allPermissionsGranted()) {
-            startCamera()
+            startCameraPreview()
         } else {
             requestPermissions()
         }
@@ -58,7 +86,70 @@ class MainActivity : AppCompatActivity() {
         // 3. Setup Button
         binding.btnRecord.setOnClickListener {
             if (!isRecording) {
-                startRecording()
+                startLiveStreaming()
+            } else {
+                stopLiveStreaming()
+            }
+        }
+    }
+
+    private fun setupAudioPlayback() {
+        val minBufferSize = AudioTrack.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        // Ensure buffer is reasonably large to prevent underruns
+        val playBufferSize = maxOf(minBufferSize, 8192)
+
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+
+        val audioFormat = AudioFormat.Builder()
+            .setSampleRate(SAMPLE_RATE)
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .build()
+
+        audioTrackLeft = AudioTrack(
+            audioAttributes,
+            audioFormat,
+            playBufferSize,
+            AudioTrack.MODE_STREAM,
+            AudioManager.AUDIO_SESSION_ID_GENERATE
+        )
+        // Route left channel audio strictly to the left speaker/headphone
+        audioTrackLeft?.setStereoVolume(1.0f, 0.0f)
+
+        audioTrackRight = AudioTrack(
+            audioAttributes,
+            audioFormat,
+            playBufferSize,
+            AudioTrack.MODE_STREAM,
+            AudioManager.AUDIO_SESSION_ID_GENERATE
+        )
+        // Route right channel audio strictly to the right speaker/headphone
+        audioTrackRight?.setStereoVolume(0.0f, 1.0f)
+
+        audioTrackLeft?.play()
+        audioTrackRight?.play()
+
+        playbackJobLeft = CoroutineScope(Dispatchers.IO).launch {
+            viewModel.leftAudioChunks.collect { chunk ->
+                if (isActive) {
+                    audioTrackLeft?.write(chunk, 0, chunk.size)
+                }
+            }
+        }
+
+        playbackJobRight = CoroutineScope(Dispatchers.IO).launch {
+            viewModel.rightAudioChunks.collect { chunk ->
+                if (isActive) {
+                    audioTrackRight?.write(chunk, 0, chunk.size)
+                }
             }
         }
     }
@@ -69,52 +160,32 @@ class MainActivity : AppCompatActivity() {
                 is UiState.Idle -> {
                     binding.progressBar.visibility = View.GONE
                     binding.btnRecord.isEnabled = true
-                    binding.btnRecord.text = "Record 6s"
+                    binding.btnRecord.text = "Start Live Processing"
+                    binding.ivHeatmapOverlay.visibility = View.GONE
                 }
-                is UiState.Processing -> {
-                    binding.progressBar.visibility = View.VISIBLE
-                    binding.btnRecord.isEnabled = false
-                    binding.tvStatus.text = "Preparing Video..."
-                }
-                is UiState.Uploading -> {
-                    binding.progressBar.visibility = View.VISIBLE
-                    binding.tvStatus.text = "Streaming to AI..."
-                }
-                is UiState.NavigationReady -> {
+                is UiState.Streaming -> {
                     binding.progressBar.visibility = View.GONE
                     binding.btnRecord.isEnabled = true
-                    binding.btnRecord.text = "Record Again"
-                    binding.tvStatus.text = "✅ Done! Opening Results."
-
-                    // TRIGGER NAVIGATION
-                    if (currentRawFile != null) {
-                        ResultActivity.start(
-                            context = this,
-                            rawVideo = currentRawFile!!,
-                            processedVideo = currentRawFile!!, // Fallback to raw since mobile processing is removed
-                            heatmap = state.heatmapFile,
-                            audio1 = state.audio1File,
-                            audio2 = state.audio2File
-                        )
-                    } else {
-                        Toast.makeText(this, "Error: Missing video file", Toast.LENGTH_SHORT).show()
-                    }
-
-                    // Reset state after navigation so we don't navigate again on rotation
-                    viewModel.resetState()
+                    binding.btnRecord.text = "Stop Processing"
+                    binding.tvStatus.text = "Streaming... (Waiting for 6s buffer)"
+                    binding.ivHeatmapOverlay.visibility = View.VISIBLE
                 }
                 is UiState.Error -> {
-                    binding.progressBar.visibility = View.GONE
-                    binding.btnRecord.isEnabled = true
-                    binding.btnRecord.text = "Retry"
+                    stopLiveStreaming()
                     binding.tvStatus.text = "❌ Error: ${state.message}"
                     Log.e("SonicSight", "UI Error: ${state.message}")
                 }
+                else -> {}
             }
+        }
+
+        viewModel.streamResults.observe(this) { bitmap ->
+            binding.ivHeatmapOverlay.setImageBitmap(bitmap)
+            binding.tvStatus.text = "Live Heatmap Active"
         }
     }
 
-    private fun startCamera() {
+    private fun startCameraPreview() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 
         cameraProviderFuture.addListener({
@@ -123,17 +194,12 @@ class MainActivity : AppCompatActivity() {
             val preview = Preview.Builder().build()
             preview.setSurfaceProvider(binding.viewFinder.surfaceProvider)
 
-            val recorder = Recorder.Builder()
-                .setQualitySelector(QualitySelector.from(Quality.SD))
-                .build()
-            videoCapture = VideoCapture.withOutput(recorder)
-
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, videoCapture
+                    this, cameraSelector, preview
                 )
             } catch (exc: Exception) {
                 Log.e("SonicSight", "Use case binding failed", exc)
@@ -142,77 +208,148 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun startRecording() {
-        val videoCapture = this.videoCapture ?: return
+    @SuppressLint("MissingPermission")
+    private fun startLiveStreaming() {
+        if (!allPermissionsGranted()) return
 
         isRecording = true
-        binding.btnRecord.isEnabled = false
-        binding.tvStatus.text = "Recording... (Hold steady)"
+        recordingStartTime = System.currentTimeMillis()
 
-        // Generate Filename
-        val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
-            .format(System.currentTimeMillis())
+        // Setup audio playback receivers
+        setupAudioPlayback()
 
-        // Track the raw file
-        currentRawFile = File(cacheDir, "raw_$name.mp4")
+        // Tell ViewModel to open gRPC stream
+        viewModel.startStreaming()
 
-        val outputOptions = FileOutputOptions.Builder(currentRawFile!!).build()
+        // Setup CameraX ImageAnalysis (instead of VideoCapture)
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener({
+            val cameraProvider = cameraProviderFuture.get()
 
-        val recordingBuilder = videoCapture.output.prepareRecording(this, outputOptions)
+            val preview = Preview.Builder().build()
+            preview.setSurfaceProvider(binding.viewFinder.surfaceProvider)
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
-            PackageManager.PERMISSION_GRANTED) {
-            recordingBuilder.withAudioEnabled()
-        }
+            val imageAnalysis = ImageAnalysis.Builder()
+                // Target low resolution matching our model (256x256 scaled down)
+                // 480x480 is a standard safe size
+                .setTargetResolution(android.util.Size(480, 480))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
 
-        recording = recordingBuilder.start(ContextCompat.getMainExecutor(this)) { recordEvent ->
-            when(recordEvent) {
-                is VideoRecordEvent.Start -> {
-                    startTimer()
+            // Throttle to 8 FPS manually
+            var lastAnalyzedTimestamp = 0L
+            imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                val currentTimestamp = System.currentTimeMillis()
+                if (currentTimestamp - lastAnalyzedTimestamp >= 125) { // 1000ms / 8fps = 125ms
+                    processImageProxy(imageProxy)
+                    lastAnalyzedTimestamp = currentTimestamp
                 }
-                is VideoRecordEvent.Finalize -> {
-                    if (!recordEvent.hasError()) {
-                        Log.d("SonicSight", "Capture Success: ${currentRawFile?.length()?.div(1024)} KB")
-                        // Proceed to Phase B
-                        currentRawFile?.let { processVideo(it) }
-                    } else {
-                        recording?.close()
-                        recording = null
-                        Log.e("SonicSight", "Error: ${recordEvent.error}")
-                        viewModel.resetState()
-                    }
+                imageProxy.close()
+            }
+
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+            try {
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, imageAnalysis
+                )
+            } catch (exc: Exception) {
+                Log.e("SonicSight", "Use case binding failed", exc)
+            }
+        }, ContextCompat.getMainExecutor(this))
+
+        // Setup Audio Capture
+        startAudioCapture()
+    }
+
+    private fun processImageProxy(image: ImageProxy) {
+        if (!isRecording) return
+
+        val timestampMs = System.currentTimeMillis() - recordingStartTime
+
+        // Convert YUV to JPEG
+        val yBuffer = image.planes[0].buffer
+        val uBuffer = image.planes[1].buffer
+        val vBuffer = image.planes[2].buffer
+
+        val ySize = yBuffer.remaining()
+        val uSize = uBuffer.remaining()
+        val vSize = vBuffer.remaining()
+
+        val nv21 = ByteArray(ySize + uSize + vSize)
+        yBuffer.get(nv21, 0, ySize)
+        vBuffer.get(nv21, ySize, vSize)
+        uBuffer.get(nv21, ySize + vSize, uSize)
+
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
+        val out = ByteArrayOutputStream()
+        // Compress heavily to keep chunks small
+        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 70, out)
+        val jpegBytes = out.toByteArray()
+
+        val chunk = StreamChunk.newBuilder()
+            .setTimestampMs(timestampMs)
+            .setJpegFrame(ByteString.copyFrom(jpegBytes))
+            .setFrameWidth(image.width)
+            .setFrameHeight(image.height)
+            .build()
+
+        viewModel.sendStreamChunk(chunk)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startAudioCapture() {
+        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+        // Ensure buffer is large enough for ~0.25s of audio (11025 * 0.25 * 2 bytes = ~5512 bytes)
+        val optimalBufferSize = maxOf(bufferSize, 8192)
+
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            SAMPLE_RATE,
+            CHANNEL_CONFIG,
+            AUDIO_FORMAT,
+            optimalBufferSize
+        )
+
+        audioRecord?.startRecording()
+
+        audioJob = CoroutineScope(Dispatchers.IO).launch {
+            val audioBuffer = ByteArray(optimalBufferSize)
+            while (isActive && isRecording) {
+                val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
+                if (readResult > 0) {
+                    val timestampMs = System.currentTimeMillis() - recordingStartTime
+
+                    val chunk = StreamChunk.newBuilder()
+                        .setTimestampMs(timestampMs)
+                        .setAudioPcm(ByteString.copyFrom(audioBuffer, 0, readResult))
+                        .build()
+
+                    viewModel.sendStreamChunk(chunk)
                 }
             }
         }
     }
 
-    private fun startTimer() {
-        object : CountDownTimer(7000, 1000) {
-            override fun onTick(millisUntilFinished: Long) {
-                binding.btnRecord.text = "${millisUntilFinished / 1000}s..."
-            }
+    private fun stopLiveStreaming() {
+        isRecording = false
 
-            override fun onFinish() {
-                recording?.stop()
-                recording = null
-                isRecording = false
-            }
-        }.start()
-    }
+        // Stop audio
+        audioJob?.cancel()
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
 
-    private fun processVideo(rawFile: File) {
-        viewModel.setProcessing()
+        // Stop gRPC stream
+        val finalChunk = StreamChunk.newBuilder()
+            .setIsLast(true)
+            .build()
+        viewModel.sendStreamChunk(finalChunk)
+        viewModel.resetState()
 
-        CoroutineScope(Dispatchers.IO).launch {
-            // Optional: Save RAW to gallery for debugging
-            MediaUtils.saveVideoToGallery(applicationContext, rawFile, "RAW")
-
-            withContext(Dispatchers.Main) {
-                // Trigger gRPC Upload via ViewModel
-                // We send the raw file directly; the server handles FFmpeg now.
-                viewModel.uploadToBackend(rawFile)
-            }
-        }
+        // Revert camera to simple preview
+        startCameraPreview()
     }
 
     private fun requestPermissions() {
@@ -226,12 +363,18 @@ class MainActivity : AppCompatActivity() {
     private val activityResultLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
             if (permissions.all { it.value }) {
-                startCamera()
+                startCameraPreview()
             } else {
                 Toast.makeText(this, "Permissions not granted.", Toast.LENGTH_SHORT).show()
                 finish()
             }
         }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cameraExecutor.shutdown()
+        audioRecord?.release()
+    }
 
     companion object {
         private val REQUIRED_PERMISSIONS = mutableListOf(

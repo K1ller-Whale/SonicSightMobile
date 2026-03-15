@@ -7,9 +7,15 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.k1llerwhale.sonicsight.data.repository.GrpcVideoRepository
+import com.k1llerwhale.sonicsight.grpc.StreamChunk
+import com.k1llerwhale.sonicsight.grpc.StreamResult
 import com.k1llerwhale.sonicsight.util.MaskProcessor
 import com.k1llerwhale.sonicsight.util.MediaUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -20,6 +26,7 @@ sealed class UiState {
     object Idle : UiState()
     object Processing : UiState() // Now means "Preparing Video"
     object Uploading : UiState()  // Now means "Streaming to AI"
+    object Streaming : UiState()  // Near Real-Time mode
     data class Error(val message: String) : UiState()
     data class NavigationReady(
         val heatmapFile: File,
@@ -36,8 +43,83 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableLiveData<UiState>(UiState.Idle)
     val uiState: LiveData<UiState> = _uiState
 
+    // Bidirectional Streaming Channels
+    // Using explicit parameters for MutableSharedFlow to avoid ambiguity
+    val outStreamChunks = MutableSharedFlow<StreamChunk>(replay = 0, extraBufferCapacity = 64)
+
+    // Live results for UI overlay
+    private val _streamResults = MutableLiveData<Bitmap>()
+    val streamResults: LiveData<Bitmap> = _streamResults
+
+    // Raw audio chunks for playback
+    val leftAudioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 64)
+    val rightAudioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 64)
+
     fun setProcessing() {
         _uiState.value = UiState.Processing
+    }
+
+    /**
+     * Start the bidirectional stream. Call this right before starting capture.
+     */
+    fun startStreaming() {
+        _uiState.value = UiState.Streaming
+
+        viewModelScope.launch {
+            repository.streamProcess(outStreamChunks)
+                .catch { e ->
+                    _uiState.postValue(UiState.Error("Stream error: ${e.message}"))
+                }
+                .collect { response ->
+                    handleStreamResult(response)
+                }
+        }
+    }
+
+    /**
+     * Send a chunk to the server.
+     */
+    fun sendStreamChunk(chunk: StreamChunk) {
+        outStreamChunks.tryEmit(chunk)
+    }
+
+    private suspend fun handleStreamResult(response: StreamResult) {
+        if (!response.success) {
+            withContext(Dispatchers.Main) {
+                _uiState.value = UiState.Error(response.errorMessage)
+            }
+            return
+        }
+
+        if (response.isBuffering) {
+            // Can update UI to show "Buffering..." or similar
+            return
+        }
+
+        // Emit audio chunks for playback
+        if (response.leftAudioPcm.size() > 0) {
+            leftAudioChunks.emit(response.leftAudioPcm.toByteArray())
+            rightAudioChunks.emit(response.rightAudioPcm.toByteArray())
+        }
+
+        // Render visual heatmaps
+        withContext(Dispatchers.IO) {
+            val leftOverlay = maskProcessor.createOverlay(
+                response.leftHeatmap.toByteArray(),
+                response.centerFrameJpeg.toByteArray()
+            )
+            val rightOverlay = maskProcessor.createOverlay(
+                response.rightHeatmap.toByteArray(),
+                response.centerFrameJpeg.toByteArray()
+            )
+
+            if (leftOverlay != null && rightOverlay != null) {
+                val combinedBitmap = maskProcessor.stitchSideBySide(leftOverlay, rightOverlay)
+                withContext(Dispatchers.Main) {
+                    _streamResults.value = combinedBitmap
+                }
+            }
+        }
     }
 
     fun uploadToBackend(rawVideoFile: File) {

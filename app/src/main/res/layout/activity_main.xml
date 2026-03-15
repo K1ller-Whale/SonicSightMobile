@@ -13,6 +13,18 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- OVERLAY: Live Heatmap from server -->
+    <ImageView
+        android:id="@+id/ivHeatmapOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitCenter"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <!-- 2. Status Log (To see file sizes) -->
     <TextView
         android:id="@+id/tvStatus"
@@ -34,7 +46,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginBottom="32dp"
-        android:text="Record 7s"
+        android:text="Start Live Processing"
         android:backgroundTint="#E91E63"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
