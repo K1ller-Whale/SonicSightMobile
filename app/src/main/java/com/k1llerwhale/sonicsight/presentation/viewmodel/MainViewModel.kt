@@ -18,8 +18,8 @@ import java.io.FileOutputStream
 // Define UI States
 sealed class UiState {
     object Idle : UiState()
-    object Processing : UiState() // Now means "Preparing/Streaming"
-    object Uploading : UiState()  // Sending to Server
+    object Processing : UiState() // Now means "Preparing Video"
+    object Uploading : UiState()  // Now means "Streaming to AI"
     data class Error(val message: String) : UiState()
     data class NavigationReady(
         val heatmapFile: File,
@@ -46,13 +46,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val result = repository.processVideo(rawVideoFile)
 
-            if (result.isSuccess) {
-                val response = result.getOrThrow()
+            result.onSuccess { response ->
                 val context = getApplication<Application>().applicationContext
 
                 withContext(Dispatchers.IO) {
                     try {
                         // 1. Process Heatmap Overlays
+                        // Note: Proto 'left_heatmap' becomes 'leftHeatmap' in Kotlin stub
                         val leftOverlay = maskProcessor.createOverlay(
                             response.leftHeatmap.toByteArray(),
                             response.leftCenterFrame.toByteArray()
@@ -76,7 +76,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             combinedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
                         }
 
-                        // 3. Save PCM Audio as WAV (so MediaPlayer can play it)
+                        // 3. Save PCM Audio as WAV
                         val audio1 = MediaUtils.savePcmToWav(
                             context,
                             response.leftAudioPcm.toByteArray(),
@@ -103,8 +103,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
-            } else {
-                _uiState.value = UiState.Error(result.exceptionOrNull()?.message ?: "Unknown Error")
+            }.onFailure { exception ->
+                _uiState.value = UiState.Error(exception.message ?: "Unknown Error")
             }
         }
     }

@@ -39,7 +39,7 @@ class VideoChunkEmitter(private val videoFile: File) {
             bytesRead = input.read(buffer)
             if (bytesRead > 0) {
                 val isLast = input.available() == 0
-                val chunkBuilder = VideoChunk.newBuilder()
+                val chunk = VideoChunk.newBuilder()
                     .setMetadata(VideoMetadata.newBuilder()
                         .setTotalSize(totalSize)
                         .setFilename(videoFile.name)
@@ -49,8 +49,9 @@ class VideoChunkEmitter(private val videoFile: File) {
                     .setData(ByteString.copyFrom(buffer, 0, bytesRead))
                     .setChunkIndex(chunkIndex++)
                     .setIsLast(isLast)
+                    .build()
 
-                emit(chunkBuilder.build())
+                emit(chunk)
 
                 if (isLast) return@flow
             }
@@ -58,11 +59,13 @@ class VideoChunkEmitter(private val videoFile: File) {
             // Subsequent chunks
             while (input.read(buffer).also { bytesRead = it } > 0) {
                 val isLast = input.available() == 0
-                emit(VideoChunk.newBuilder()
+                val chunk = VideoChunk.newBuilder()
                     .setData(ByteString.copyFrom(buffer, 0, bytesRead))
                     .setChunkIndex(chunkIndex++)
                     .setIsLast(isLast)
-                    .build())
+                    .build()
+
+                emit(chunk)
 
                 if (isLast) break
             }

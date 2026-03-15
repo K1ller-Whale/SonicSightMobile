@@ -33,8 +33,6 @@ protobuf-kotlin-lite = { group = "com.google.protobuf", name = "protobuf-kotlin-
 protobuf-protoc = { group = "com.google.protobuf", name = "protoc", version.ref = "protobuf" }
 grpc-gen-java = { group = "io.grpc", name = "protoc-gen-grpc-java", version.ref = "grpc" }
 grpc-gen-kotlin = { group = "io.grpc", name = "protoc-gen-grpc-kotlin", version.ref = "grpc-kotlin" }
-# Add a version string that includes the jdk8@jar classifier
-grpc-kotlin-generator = { module = "io.grpc:protoc-gen-grpc-kotlin:1.4.1", version = "1.4.1" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

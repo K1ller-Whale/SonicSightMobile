@@ -103,10 +103,6 @@ class MainActivity : AppCompatActivity() {
                     // Reset state after navigation so we don't navigate again on rotation
                     viewModel.resetState()
                 }
-                is UiState.Success -> {
-                    // This state is technically replaced by NavigationReady,
-                    // but kept for fallback or simple testing
-                }
                 is UiState.Error -> {
                     binding.progressBar.visibility = View.GONE
                     binding.btnRecord.isEnabled = true

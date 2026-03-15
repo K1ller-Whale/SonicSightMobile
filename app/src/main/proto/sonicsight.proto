@@ -3,6 +3,7 @@ syntax = "proto3";
 package sonicsight;
 
 option java_package = "com.k1llerwhale.sonicsight.grpc";
+option java_outer_classname = "SonicSightProto";
 option java_multiple_files = true;
 
 // ──────────────────────────────────────────────

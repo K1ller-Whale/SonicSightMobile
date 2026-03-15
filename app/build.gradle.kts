@@ -86,6 +86,7 @@ dependencies {
     implementation(libs.grpc.stub)
     implementation(libs.grpc.kotlin.stub)
     implementation(libs.protobuf.kotlin.lite)
+    implementation("com.google.protobuf:protobuf-javalite:3.25.3")
 }
 
 protobuf {
@@ -111,6 +112,9 @@ protobuf {
                 }
             }
             it.builtins {
+                register("java") {
+                    option("lite")
+                }
                 register("kotlin") {
                     option("lite")
                 }
