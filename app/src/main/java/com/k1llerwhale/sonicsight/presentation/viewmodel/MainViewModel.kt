@@ -49,6 +49,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _streamResults = MutableLiveData<Bitmap>()
     val streamResults: LiveData<Bitmap> = _streamResults
 
+    // Buffering Progress (0 to 100)
+    private val _bufferingProgress = MutableLiveData<Int>(0)
+    val bufferingProgress: LiveData<Int> = _bufferingProgress
+
+    // Visualizer Levels (0.0 to 1.0)
+    private val _leftVolume = MutableLiveData<Float>(0f)
+    val leftVolume: LiveData<Float> = _leftVolume
+
+    private val _rightVolume = MutableLiveData<Float>(0f)
+    val rightVolume: LiveData<Float> = _rightVolume
+
+    private var heatmapIntensity = 0.7f
+
+    fun setHeatmapIntensity(progress: Int) {
+        heatmapIntensity = progress / 100f
+    }
+
     // Raw audio chunks for playback
     val leftAudioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 64)
     val rightAudioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 64)
@@ -91,6 +108,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (response.isBuffering) {
+            _bufferingProgress.postValue((response.bufferingProgress * 100).toInt())
             return
         }
 
@@ -98,8 +116,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Emit audio chunks for playback
         if (response.leftAudioPcm.size() > 0) {
-            leftAudioChunks.emit(response.leftAudioPcm.toByteArray())
-            rightAudioChunks.emit(response.rightAudioPcm.toByteArray())
+            val leftBytes = response.leftAudioPcm.toByteArray()
+            val rightBytes = response.rightAudioPcm.toByteArray()
+
+            // Calculate volume for visualizer
+            _leftVolume.postValue(calculateVolume(leftBytes))
+            _rightVolume.postValue(calculateVolume(rightBytes))
+
+            leftAudioChunks.emit(leftBytes)
+            rightAudioChunks.emit(rightBytes)
         }
 
         // Render visual heatmaps using LOCAL cached frame (transparent overlay)
@@ -122,6 +147,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    private fun calculateVolume(pcmData: ByteArray): Float {
+        if (pcmData.isEmpty()) return 0f
+        var sum = 0.0
+        // PCM 16-bit is 2 bytes per sample
+        for (i in 0 until pcmData.size - 1 step 2) {
+            val sample = ((pcmData[i+1].toInt() shl 8) or (pcmData[i].toInt() and 0xFF)).toShort()
+            sum += sample.toDouble() * sample.toDouble()
+        }
+        val rms = Math.sqrt(sum / (pcmData.size / 2))
+        // Normalize to 0.0 - 1.0 (Approximate max for speech/ambient)
+        return (rms / 32768.0).toFloat().coerceIn(0f, 1f) * 5f // Multiply for visibility
     }
 
     fun uploadToBackend(rawVideoFile: File) {

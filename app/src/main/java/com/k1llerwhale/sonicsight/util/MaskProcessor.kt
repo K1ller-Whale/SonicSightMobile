@@ -8,14 +8,23 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class MaskProcessor {
-    /**
-     * Creates an overlay bitmap by combining a heatmap and a center frame.
-     *
-     * @param heatmapBytes Raw float32 bytes of the 224x224 heatmap
-     * @param frameJpeg JPEG-encoded center frame
-     * @param alpha Transparency of the heatmap overlay (0.0 to 1.0)
-     * @return A Bitmap with the heatmap overlaid on the frame
-     */
+    // Look-Up Table for fast heatmap rendering (256 entries)
+    private val colorLUT = IntArray(256)
+
+    init {
+        precomputeLUT()
+    }
+
+    private fun precomputeLUT() {
+        for (i in 0..255) {
+            val v = i / 255.0f
+            // Pre-calculate non-linear alpha (v^0.7)
+            val alpha = (Math.pow(v.toDouble(), 0.7).coerceIn(0.0, 1.0) * 255).toInt()
+            // Map directly to ARGB pixel
+            colorLUT[i] = (alpha shl 24) or (jetColormap(v) and 0x00FFFFFF)
+        }
+    }
+
     /**
      * Creates an overlay bitmap by combining a float32 heatmap and a center frame.
      * Used for full video processing (non-streaming).
@@ -68,9 +77,7 @@ class MaskProcessor {
 
         for (i in 0 until (w * h)) {
             val v = values[i].coerceIn(0f, 1f)
-            // Use 1.0 - v because the model typically returns high values for sources,
-            // and we want those to be red.
-            pixels[i] = jetColormap(1.0f - v)
+            pixels[i] = jetColormap(v)
         }
 
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
@@ -95,6 +102,7 @@ class MaskProcessor {
     /**
      * Creates a transparent heatmap bitmap that can be overlaid on the live camera preview.
      * Alpha is proportional to the intensity of the sound at that pixel.
+     * Optimized using a pre-computed LUT.
      */
     fun createTransparentHeatmap(
         heatmapBytes: ByteArray,
@@ -102,22 +110,15 @@ class MaskProcessor {
         height: Int = 224
     ): Bitmap? {
         try {
-            val heatmap = FloatArray(width * height)
-            for (i in 0 until (width * height)) {
-                if (i < heatmapBytes.size) {
-                    heatmap[i] = (heatmapBytes[i].toInt() and 0xFF) / 255.0f
-                }
-            }
+            if (heatmapBytes.size < width * height) return null
 
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val pixels = IntArray(width * height)
 
             for (i in 0 until (width * height)) {
-                val v = heatmap[i].coerceIn(0f, 1f)
-                // Map the intensity to transparency: louder = more opaque
-                // We also amplify the intensity slightly for better visibility
-                val alpha = (v.coerceIn(0f, 1f) * 255).toInt()
-                pixels[i] = (alpha shl 24) or (jetColormap(1.0f - v) and 0x00FFFFFF)
+                // Convert signed byte to unsigned int (0-255) and use LUT
+                val vInt = heatmapBytes[i].toInt() and 0xFF
+                pixels[i] = colorLUT[vInt]
             }
 
             bitmap.setPixels(pixels, 0, width, 0, 0, width, height)

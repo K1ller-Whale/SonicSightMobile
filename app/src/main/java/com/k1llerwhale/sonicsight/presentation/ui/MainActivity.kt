@@ -24,8 +24,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
@@ -42,8 +40,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
@@ -51,9 +47,9 @@ class MainActivity : AppCompatActivity() {
     private val viewModel: MainViewModel by viewModels()
 
     // CameraX variables
-    private lateinit var cameraExecutor: ExecutorService
     private var isRecording = false
     private var recordingStartTime = 0L
+    private var frameJob: Job? = null
 
     // Audio variables
     private var audioRecord: AudioRecord? = null
@@ -68,12 +64,15 @@ class MainActivity : AppCompatActivity() {
     private var playbackJobLeft: Job? = null
     private var playbackJobRight: Job? = null
 
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+    private var isTouching = false
+    private var isMuted = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
-        cameraExecutor = Executors.newSingleThreadExecutor()
 
         // 1. Observe ViewModel State
         observeUiState()
@@ -92,6 +91,60 @@ class MainActivity : AppCompatActivity() {
             } else {
                 stopLiveStreaming()
             }
+        }
+
+        // 4. Setup Mute Button
+        binding.btnMute.setOnClickListener {
+            isMuted = !isMuted
+            val icon = if (isMuted) android.R.drawable.ic_lock_silent_mode else android.R.drawable.ic_lock_silent_mode_off
+            binding.btnMute.setImageResource(icon)
+
+            // Adjust volume of existing tracks
+            val volume = if (isMuted) 0.0f else 1.0f
+            audioTrackLeft?.setStereoVolume(volume, 0.0f)
+            audioTrackRight?.setStereoVolume(0.0f, volume)
+        }
+
+        // 5. Setup Touch Listener for surgical audio separation
+        setupTouchListener()
+
+        // 5. Setup Intensity Control
+        binding.sbIntensity.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                viewModel.setHeatmapIntensity(progress)
+                binding.ivHeatmapOverlay.alpha = progress / 100f
+            }
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+        })
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupTouchListener() {
+        binding.viewFinder.setOnTouchListener { view, event ->
+            when (event.action) {
+                android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
+                    isTouching = true
+                    // Normalize coordinates 0.0 to 1.0
+                    lastTouchX = event.x / view.width
+                    lastTouchY = event.y / view.height
+
+                    // Update UI indicator
+                    binding.vTouchIndicator.visibility = View.VISIBLE
+
+                    // Use actual width/height if available, otherwise fallback to dp-to-px estimate
+                    val indicatorWidth = if (binding.vTouchIndicator.width > 0) binding.vTouchIndicator.width else (60 * resources.displayMetrics.density).toInt()
+                    val indicatorHeight = if (binding.vTouchIndicator.height > 0) binding.vTouchIndicator.height else (60 * resources.displayMetrics.density).toInt()
+
+                    binding.vTouchIndicator.x = event.x - indicatorWidth / 2f
+                    binding.vTouchIndicator.y = event.y - indicatorHeight / 2f
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    isTouching = false
+                    binding.vTouchIndicator.visibility = View.GONE
+                }
+            }
+            true // Consume event
         }
     }
 
@@ -123,8 +176,9 @@ class MainActivity : AppCompatActivity() {
             AudioTrack.MODE_STREAM,
             AudioManager.AUDIO_SESSION_ID_GENERATE
         )
-        // Route left channel audio strictly to the left speaker/headphone
-        audioTrackLeft?.setStereoVolume(1.0f, 0.0f)
+        // Route left channel audio and respect mute state
+        val volume = if (isMuted) 0.0f else 1.0f
+        audioTrackLeft?.setStereoVolume(volume, 0.0f)
 
         audioTrackRight = AudioTrack(
             audioAttributes,
@@ -133,8 +187,8 @@ class MainActivity : AppCompatActivity() {
             AudioTrack.MODE_STREAM,
             AudioManager.AUDIO_SESSION_ID_GENERATE
         )
-        // Route right channel audio strictly to the right speaker/headphone
-        audioTrackRight?.setStereoVolume(0.0f, 1.0f)
+        // Route right channel audio and respect mute state
+        audioTrackRight?.setStereoVolume(0.0f, volume)
 
         audioTrackLeft?.play()
         audioTrackRight?.play()
@@ -157,20 +211,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun observeUiState() {
+        var isCurrentlyBuffering = true
+
         viewModel.uiState.observe(this) { state ->
             when(state) {
                 is UiState.Idle -> {
+                    isCurrentlyBuffering = true
                     binding.progressBar.visibility = View.GONE
                     binding.btnRecord.isEnabled = true
                     binding.btnRecord.text = "Start Live Processing"
                     binding.ivHeatmapOverlay.visibility = View.GONE
+                    binding.llVisualizer.visibility = View.GONE
+                    binding.sbIntensity.visibility = View.GONE
+                    binding.vTouchIndicator.visibility = View.GONE
+                    binding.tvHint.visibility = View.GONE
+                    binding.btnMute.visibility = View.GONE
                 }
                 is UiState.Streaming -> {
                     binding.progressBar.visibility = View.GONE
                     binding.btnRecord.isEnabled = true
                     binding.btnRecord.text = "Stop Processing"
-                    binding.tvStatus.text = "Streaming... (Waiting for 6s buffer)"
+                    binding.tvStatus.text = "Initializing Stream..."
                     binding.ivHeatmapOverlay.visibility = View.VISIBLE
+                    binding.llVisualizer.visibility = View.VISIBLE
+                    binding.sbIntensity.visibility = View.VISIBLE
+                    binding.tvHint.visibility = View.VISIBLE
+                    binding.btnMute.visibility = View.VISIBLE
                 }
                 is UiState.Error -> {
                     stopLiveStreaming()
@@ -182,8 +248,31 @@ class MainActivity : AppCompatActivity() {
         }
 
         viewModel.streamResults.observe(this) { bitmap ->
+            isCurrentlyBuffering = false
             binding.ivHeatmapOverlay.setImageBitmap(bitmap)
-            binding.tvStatus.text = "Live Heatmap Active"
+            binding.tvStatus.text = if (isTouching) "Surgical Focus Active" else "Spatial Stereo Active"
+        }
+
+        // Observe Buffering Progress
+        viewModel.bufferingProgress.observe(this) { progress ->
+            if (isCurrentlyBuffering && progress < 100) {
+                binding.tvStatus.text = "Buffering: $progress%"
+            }
+        }
+
+        // Observe Volume for Visualizer
+        viewModel.leftVolume.observe(this) { level ->
+            val params = binding.vLevelLeft.layoutParams
+            val maxHeightPx = (100 * resources.displayMetrics.density).toInt()
+            params.height = (level * maxHeightPx).toInt()
+            binding.vLevelLeft.layoutParams = params
+        }
+
+        viewModel.rightVolume.observe(this) { level ->
+            val params = binding.vLevelRight.layoutParams
+            val maxHeightPx = (100 * resources.displayMetrics.density).toInt()
+            params.height = (level * maxHeightPx).toInt()
+            binding.vLevelRight.layoutParams = params
         }
     }
 
@@ -223,142 +312,65 @@ class MainActivity : AppCompatActivity() {
         // Tell ViewModel to open gRPC stream
         viewModel.startStreaming()
 
-        // Setup CameraX ImageAnalysis (instead of VideoCapture)
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-        cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
+        // Start Frame Capture Loop (8 FPS)
+        // Using PreviewView.bitmap ensures the frame matches the screen alignment/crop exactly
+        frameJob = CoroutineScope(Dispatchers.Main).launch {
+            while (isActive && isRecording) {
+                val startTime = System.currentTimeMillis()
+                val bitmap = binding.viewFinder.bitmap
 
-            val preview = Preview.Builder().build()
-            preview.setSurfaceProvider(binding.viewFinder.surfaceProvider)
+                if (bitmap != null) {
+                    val timestampMs = System.currentTimeMillis() - recordingStartTime
 
-            val imageAnalysis = ImageAnalysis.Builder()
-                // Target low resolution matching our model (256x256 scaled down)
-                // 480x480 is a standard safe size
-                .setTargetResolution(android.util.Size(480, 480))
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
+                    // Process in IO thread
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val out = ByteArrayOutputStream()
+                            // Downscale to 224x224 to match the AI model input exactly
+                            val scaled = Bitmap.createScaledBitmap(bitmap, 224, 224, true)
 
-            // Throttle to 8 FPS manually
-            var lastAnalyzedTimestamp = 0L
-            imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                val currentTimestamp = System.currentTimeMillis()
-                if (currentTimestamp - lastAnalyzedTimestamp >= 125) { // 1000ms / 8fps = 125ms
-                    processImageProxy(imageProxy)
-                    lastAnalyzedTimestamp = currentTimestamp
+                            try {
+                                scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                                val jpegBytes = out.toByteArray()
+
+                                val chunk = StreamChunk.newBuilder()
+                                    .setTimestampMs(timestampMs)
+                                    .setJpegFrame(ByteString.copyFrom(jpegBytes))
+                                    .setFrameWidth(bitmap.width)
+                                    .setFrameHeight(bitmap.height)
+                                    .setTouchX(lastTouchX)
+                                    .setTouchY(lastTouchY)
+                                    .setIsTouching(isTouching)
+                                    .build()
+
+                                viewModel.sendStreamChunk(chunk)
+                            } finally {
+                                if (scaled != bitmap) scaled.recycle()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("SonicSight", "Frame processing failed", e)
+                        } finally {
+                            bitmap.recycle() // CRITICAL: Fix memory leak
+                        }
+                    }
                 }
-                imageProxy.close()
-            }
 
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageAnalysis
-                )
-            } catch (exc: Exception) {
-                Log.e("SonicSight", "Use case binding failed", exc)
+                val elapsed = System.currentTimeMillis() - startTime
+                val delayTime = maxOf(0L, 125L - elapsed)
+                kotlinx.coroutines.delay(delayTime)
             }
-        }, ContextCompat.getMainExecutor(this))
+        }
 
         // Setup Audio Capture
         startAudioCapture()
     }
 
-    private fun processImageProxy(image: ImageProxy) {
-        if (!isRecording) return
-
-        val startTime = System.currentTimeMillis()
-        val timestampMs = startTime - recordingStartTime
-        val rotationDegrees = image.imageInfo.rotationDegrees
-
-        // 1. Convert YUV_420_888 to NV21 ByteArray
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
-
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
-
-        val nv21 = ByteArray(ySize + uSize + vSize)
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
-
-        // 2. Create JPEG from NV21
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 70, out)
-        var jpegBytes = out.toByteArray()
-
-        val prepTime = System.currentTimeMillis() - startTime
-
-        // 3. Handle Orientation: Rotate if necessary
-        var rotateTime = 0L
-        if (rotationDegrees != 0) {
-            val rotateStart = System.currentTimeMillis()
-            val originalBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-            val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-            val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
-
-            val rotatedOut = ByteArrayOutputStream()
-            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 70, rotatedOut)
-            jpegBytes = rotatedOut.toByteArray()
-
-            originalBitmap.recycle()
-            rotatedBitmap.recycle()
-            rotateTime = System.currentTimeMillis() - rotateStart
-        }
-
-        // 4. Send to Backend
-        val chunk = StreamChunk.newBuilder()
-            .setTimestampMs(timestampMs)
-            .setJpegFrame(ByteString.copyFrom(jpegBytes))
-            .setFrameWidth(image.width)
-            .setFrameHeight(image.height)
-            .build()
-
-        viewModel.sendStreamChunk(chunk)
-        Log.d("SonicSightPerf", "Frame Prep: ${prepTime}ms, Rotate: ${rotateTime}ms, Total: ${System.currentTimeMillis() - startTime}ms")
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun startAudioCapture() {
-        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-        // Ensure buffer is large enough for ~0.25s of audio (11025 * 0.25 * 2 bytes = ~5512 bytes)
-        val optimalBufferSize = maxOf(bufferSize, 8192)
-
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE,
-            CHANNEL_CONFIG,
-            AUDIO_FORMAT,
-            optimalBufferSize
-        )
-
-        audioRecord?.startRecording()
-
-        audioJob = CoroutineScope(Dispatchers.IO).launch {
-            val audioBuffer = ByteArray(optimalBufferSize)
-            while (isActive && isRecording) {
-                val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
-                if (readResult > 0) {
-                    val timestampMs = System.currentTimeMillis() - recordingStartTime
-
-                    val chunk = StreamChunk.newBuilder()
-                        .setTimestampMs(timestampMs)
-                        .setAudioPcm(ByteString.copyFrom(audioBuffer, 0, readResult))
-                        .build()
-
-                    viewModel.sendStreamChunk(chunk)
-                }
-            }
-        }
-    }
-
     private fun stopLiveStreaming() {
         isRecording = false
+
+        // Stop frame capture
+        frameJob?.cancel()
+        frameJob = null
 
         // Stop audio
         audioJob?.cancel()
@@ -373,9 +385,10 @@ class MainActivity : AppCompatActivity() {
         viewModel.sendStreamChunk(finalChunk)
         viewModel.resetState()
 
-        // Revert camera to simple preview
-        startCameraPreview()
+        // Camera is already running preview, no need to restart
     }
+
+    // Removed processImageProxy and original imageAnalysis logic
 
     private fun requestPermissions() {
         activityResultLauncher.launch(REQUIRED_PERMISSIONS)
@@ -397,7 +410,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        cameraExecutor.shutdown()
         audioRecord?.release()
     }
 

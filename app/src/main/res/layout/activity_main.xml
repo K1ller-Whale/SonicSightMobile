@@ -7,29 +7,33 @@
     android:layout_height="match_parent"
     tools:context=".presentation.ui.MainActivity">
 
-    <!-- 1. Camera Preview -->
+    <!-- 1. Camera Preview (Full Screen) -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:scaleType="fillCenter" />
 
-    <!-- OVERLAY: Live Heatmap from server -->
-    <!-- We make it a square and center it, as the AI model uses a center crop -->
+    <!-- OVERLAY: Live Heatmap (Full Screen matching preview) -->
     <ImageView
         android:id="@+id/ivHeatmapOverlay"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
         android:scaleType="fitXY"
         android:visibility="gone"
-        android:alpha="0.7"
-        app:layout_constraintDimensionRatio="1:1"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
+        android:alpha="0.7" />
 
-    <!-- 2. Status Log (To see file sizes) -->
+    <!-- Surgical Mode Touch Indicator -->
+    <View
+        android:id="@+id/vTouchIndicator"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:background="@drawable/ring_indicator"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- 2. Status Log -->
     <TextView
         android:id="@+id/tvStatus"
         android:layout_width="0dp"
@@ -44,7 +48,62 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"/>
 
-    <!-- 3. Record Button -->
+    <!-- 3. Heatmap Intensity Control -->
+    <SeekBar
+        android:id="@+id/sbIntensity"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:max="100"
+        android:progress="70"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/llVisualizer"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- 4. Audio Visualizer Overlay -->
+    <LinearLayout
+        android:id="@+id/llVisualizer"
+        android:layout_width="wrap_content"
+        android:layout_height="100dp"
+        android:orientation="horizontal"
+        android:layout_margin="16dp"
+        android:gravity="bottom"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/btnRecord"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <View
+            android:id="@+id/vLevelLeft"
+            android:layout_width="20dp"
+            android:layout_height="0dp"
+            android:layout_marginEnd="4dp"
+            android:background="#4CAF50" />
+
+        <View
+            android:id="@+id/vLevelRight"
+            android:layout_width="20dp"
+            android:layout_height="0dp"
+            android:background="#2196F3" />
+    </LinearLayout>
+
+    <!-- Surgical Mode Hint -->
+    <TextView
+        android:id="@+id/tvHint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:text="Tip: Tap anywhere to isolate sound at that pixel"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:background="#60000000"
+        android:padding="4dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/sbIntensity"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- 5. Record Button -->
     <Button
         android:id="@+id/btnRecord"
         android:layout_width="wrap_content"
@@ -56,7 +115,20 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- 4. Loading Indicator (Hidden by default) -->
+    <!-- Audio Control -->
+    <ImageButton
+        android:id="@+id/btnMute"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="32dp"
+        android:background="@drawable/circle_button_bg"
+        android:src="@android:drawable/ic_lock_silent_mode_off"
+        android:tint="#FFFFFF"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <ProgressBar
         android:id="@+id/progressBar"
         android:layout_width="wrap_content"
