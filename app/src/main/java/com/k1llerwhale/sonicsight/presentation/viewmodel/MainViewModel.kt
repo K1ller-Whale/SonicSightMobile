@@ -2,6 +2,7 @@ package com.k1llerwhale.sonicsight.presentation.viewmodel
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
@@ -12,10 +13,7 @@ import com.k1llerwhale.sonicsight.grpc.StreamResult
 import com.k1llerwhale.sonicsight.util.MaskProcessor
 import com.k1llerwhale.sonicsight.util.MediaUtils
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -50,6 +48,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Live results for UI overlay
     private val _streamResults = MutableLiveData<Bitmap>()
     val streamResults: LiveData<Bitmap> = _streamResults
+
+    // Frame Cache for live streaming (timestamp_ms -> Bitmap)
+    private val frameCache = java.util.concurrent.ConcurrentSkipListMap<Long, Bitmap>()
+
+    /**
+     * Cache a frame locally to be used for overlay when the AI result returns.
+     */
+    fun cacheFrame(timestampMs: Long, bitmap: Bitmap) {
+        frameCache[timestampMs] = bitmap
+        // Keep cache small (approx 5 seconds at 8fps = 40 frames)
+        if (frameCache.size > 60) {
+            val firstKey = frameCache.firstKey()
+            // REMOVED .recycle() here to prevent race conditions with the renderer
+            frameCache.remove(firstKey)
+        }
+    }
+
+    private fun getClosestFrame(timestampMs: Long): Bitmap? {
+        if (frameCache.isEmpty()) return null
+
+        // Find the key closest to the requested timestamp
+        val floor = frameCache.floorKey(timestampMs)
+        val ceil = frameCache.ceilingKey(timestampMs)
+
+        val key = when {
+            floor == null -> ceil
+            ceil == null -> floor
+            (timestampMs - floor) < (ceil - timestampMs) -> floor
+            else -> ceil
+        }
+
+        return key?.let { frameCache[it] }
+    }
 
     // Raw audio chunks for playback
     val leftAudioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 64)
@@ -93,7 +124,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (response.isBuffering) {
-            // Can update UI to show "Buffering..." or similar
             return
         }
 
@@ -105,16 +135,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             rightAudioChunks.emit(response.rightAudioPcm.toByteArray())
         }
 
-        // Render visual heatmaps
+        // Render visual heatmaps using LOCAL cached frame
         withContext(Dispatchers.IO) {
             val renderStart = System.currentTimeMillis()
-            val leftOverlay = maskProcessor.createOverlay(
+
+            val localFrame = getClosestFrame(response.timestampMs)
+            if (localFrame == null || localFrame.isRecycled) {
+                Log.w("SonicSight", "No valid cached frame found for timestamp ${response.timestampMs}ms")
+                return@withContext
+            }
+
+            val leftOverlay = maskProcessor.createOverlayFromBitmap(
                 response.leftHeatmap.toByteArray(),
-                response.centerFrameJpeg.toByteArray()
+                localFrame
             )
-            val rightOverlay = maskProcessor.createOverlay(
+            val rightOverlay = maskProcessor.createOverlayFromBitmap(
                 response.rightHeatmap.toByteArray(),
-                response.centerFrameJpeg.toByteArray()
+                localFrame
             )
 
             if (leftOverlay != null && rightOverlay != null) {

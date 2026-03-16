@@ -16,13 +16,59 @@ class MaskProcessor {
      * @param alpha Transparency of the heatmap overlay (0.0 to 1.0)
      * @return A Bitmap with the heatmap overlaid on the frame
      */
+    /**
+     * Creates an overlay bitmap using a pre-decoded frame bitmap and uint8 heatmap.
+     * Optimized for live streaming.
+     */
+    fun createOverlayFromBitmap(
+        heatmapBytes: ByteArray,
+        frame: Bitmap,
+        alpha: Float = 0.6f
+    ): Bitmap? {
+        if (frame.isRecycled) return null
+        try {
+            // 1. Decode heatmap from uint8 bytes (0-255)
+            val heatmap = FloatArray(224 * 224)
+            for (i in 0 until (224 * 224)) {
+                if (i < heatmapBytes.size) {
+                    heatmap[i] = (heatmapBytes[i].toInt() and 0xFF) / 255.0f
+                }
+            }
+
+            // 2. Create heatmap bitmap
+            val heatmapBitmap = createHeatmapBitmap(heatmap, 224, 224)
+            val scaledHeatmap = Bitmap.createScaledBitmap(
+                heatmapBitmap, frame.width, frame.height, true
+            )
+
+            // 3. Alpha blend
+            val result = Bitmap.createBitmap(frame.width, frame.height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(result)
+            canvas.drawBitmap(frame, 0f, 0f, null)
+
+            val paint = Paint().apply {
+                this.alpha = (alpha * 255).toInt()
+                this.isFilterBitmap = true
+            }
+            canvas.drawBitmap(scaledHeatmap, 0f, 0f, paint)
+
+            return result
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
+        }
+    }
+
+    /**
+     * Creates an overlay bitmap by combining a float32 heatmap and a center frame.
+     * Used for full video processing (non-streaming).
+     */
     fun createOverlay(
         heatmapBytes: ByteArray,
         frameJpeg: ByteArray,
         alpha: Float = 0.6f
     ): Bitmap? {
         try {
-            // val start = System.currentTimeMillis()
             // 1. Decode heatmap from float32 bytes (Little Endian)
             val buffer = ByteBuffer.wrap(heatmapBytes).order(ByteOrder.LITTLE_ENDIAN)
             val heatmap = FloatArray(224 * 224)
@@ -35,15 +81,13 @@ class MaskProcessor {
             // 2. Decode center frame
             val frame = BitmapFactory.decodeByteArray(frameJpeg, 0, frameJpeg.size) ?: return null
 
-            // 3. Scale heatmap to frame dimensions
-            // First create the small heatmap bitmap
+            // 3. Create heatmap bitmap
             val heatmapBitmap = createHeatmapBitmap(heatmap, 224, 224)
-            // Then scale it to match the frame size
             val scaledHeatmap = Bitmap.createScaledBitmap(
                 heatmapBitmap, frame.width, frame.height, true
             )
 
-            // 4. Alpha blend (overlay)
+            // 4. Alpha blend
             val result = Bitmap.createBitmap(frame.width, frame.height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(result)
             canvas.drawBitmap(frame, 0f, 0f, null)
@@ -54,7 +98,6 @@ class MaskProcessor {
             }
             canvas.drawBitmap(scaledHeatmap, 0f, 0f, paint)
 
-            // android.util.Log.d("SonicSightPerf", "  [MaskProcessor] createOverlay took ${System.currentTimeMillis() - start}ms")
             return result
         } catch (e: Exception) {
             e.printStackTrace()

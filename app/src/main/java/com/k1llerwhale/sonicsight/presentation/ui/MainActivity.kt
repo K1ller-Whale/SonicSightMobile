@@ -297,20 +297,26 @@ class MainActivity : AppCompatActivity() {
         // 3. Handle Orientation: Rotate if necessary
         // AI model expects an "upright" image to correctly split left/right
         var rotateTime = 0L
+        val bitmapForCache: Bitmap
+
         if (rotationDegrees != 0) {
             val rotateStart = System.currentTimeMillis()
-            val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+            val originalBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
             val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-            val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            bitmapForCache = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
 
             val rotatedOut = ByteArrayOutputStream()
-            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 70, rotatedOut)
+            bitmapForCache.compress(Bitmap.CompressFormat.JPEG, 70, rotatedOut)
             jpegBytes = rotatedOut.toByteArray()
 
-            bitmap.recycle()
-            rotatedBitmap.recycle()
+            originalBitmap.recycle()
             rotateTime = System.currentTimeMillis() - rotateStart
+        } else {
+            bitmapForCache = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
         }
+
+        // Cache the frame locally for later overlay
+        viewModel.cacheFrame(timestampMs, bitmapForCache)
 
         // 4. Send to Backend
         val chunk = StreamChunk.newBuilder()
