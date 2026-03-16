@@ -49,39 +49,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _streamResults = MutableLiveData<Bitmap>()
     val streamResults: LiveData<Bitmap> = _streamResults
 
-    // Frame Cache for live streaming (timestamp_ms -> Bitmap)
-    private val frameCache = java.util.concurrent.ConcurrentSkipListMap<Long, Bitmap>()
-
-    /**
-     * Cache a frame locally to be used for overlay when the AI result returns.
-     */
-    fun cacheFrame(timestampMs: Long, bitmap: Bitmap) {
-        frameCache[timestampMs] = bitmap
-        // Keep cache small (approx 5 seconds at 8fps = 40 frames)
-        if (frameCache.size > 60) {
-            val firstKey = frameCache.firstKey()
-            // REMOVED .recycle() here to prevent race conditions with the renderer
-            frameCache.remove(firstKey)
-        }
-    }
-
-    private fun getClosestFrame(timestampMs: Long): Bitmap? {
-        if (frameCache.isEmpty()) return null
-
-        // Find the key closest to the requested timestamp
-        val floor = frameCache.floorKey(timestampMs)
-        val ceil = frameCache.ceilingKey(timestampMs)
-
-        val key = when {
-            floor == null -> ceil
-            ceil == null -> floor
-            (timestampMs - floor) < (ceil - timestampMs) -> floor
-            else -> ceil
-        }
-
-        return key?.let { frameCache[it] }
-    }
-
     // Raw audio chunks for playback
     val leftAudioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 64)
     val rightAudioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 64)
@@ -135,30 +102,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             rightAudioChunks.emit(response.rightAudioPcm.toByteArray())
         }
 
-        // Render visual heatmaps using LOCAL cached frame
+        // Render visual heatmaps using LOCAL cached frame (transparent overlay)
         withContext(Dispatchers.IO) {
             val renderStart = System.currentTimeMillis()
 
-            val localFrame = getClosestFrame(response.timestampMs)
-            if (localFrame == null || localFrame.isRecycled) {
-                Log.w("SonicSight", "No valid cached frame found for timestamp ${response.timestampMs}ms")
-                return@withContext
-            }
-
-            val leftOverlay = maskProcessor.createOverlayFromBitmap(
-                response.leftHeatmap.toByteArray(),
-                localFrame
-            )
-            val rightOverlay = maskProcessor.createOverlayFromBitmap(
-                response.rightHeatmap.toByteArray(),
-                localFrame
+            // We use the heatmap data to create a transparent overlay
+            // that will be placed directly on top of the camera preview.
+            // Since the backend now sends the same mask for left/right in live mode,
+            // we only need one overlay.
+            val transparentHeatmap = maskProcessor.createTransparentHeatmap(
+                response.leftHeatmap.toByteArray()
             )
 
-            if (leftOverlay != null && rightOverlay != null) {
-                val combinedBitmap = maskProcessor.stitchSideBySide(leftOverlay, rightOverlay)
+            if (transparentHeatmap != null) {
                 val renderTime = System.currentTimeMillis() - renderStart
                 withContext(Dispatchers.Main) {
-                    _streamResults.value = combinedBitmap
+                    _streamResults.value = transparentHeatmap
                     Log.d("SonicSightPerf", "Total Result Latency: ${System.currentTimeMillis() - receiveTime}ms (Render: ${renderTime}ms)")
                 }
             }

@@ -295,34 +295,27 @@ class MainActivity : AppCompatActivity() {
         val prepTime = System.currentTimeMillis() - startTime
 
         // 3. Handle Orientation: Rotate if necessary
-        // AI model expects an "upright" image to correctly split left/right
         var rotateTime = 0L
-        val bitmapForCache: Bitmap
-
         if (rotationDegrees != 0) {
             val rotateStart = System.currentTimeMillis()
             val originalBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
             val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-            bitmapForCache = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
+            val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
 
             val rotatedOut = ByteArrayOutputStream()
-            bitmapForCache.compress(Bitmap.CompressFormat.JPEG, 70, rotatedOut)
+            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 70, rotatedOut)
             jpegBytes = rotatedOut.toByteArray()
 
             originalBitmap.recycle()
+            rotatedBitmap.recycle()
             rotateTime = System.currentTimeMillis() - rotateStart
-        } else {
-            bitmapForCache = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
         }
-
-        // Cache the frame locally for later overlay
-        viewModel.cacheFrame(timestampMs, bitmapForCache)
 
         // 4. Send to Backend
         val chunk = StreamChunk.newBuilder()
             .setTimestampMs(timestampMs)
             .setJpegFrame(ByteString.copyFrom(jpegBytes))
-            .setFrameWidth(image.width) // Note: Backend uses these to reconstruct
+            .setFrameWidth(image.width)
             .setFrameHeight(image.height)
             .build()
 

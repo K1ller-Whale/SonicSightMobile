@@ -17,49 +17,6 @@ class MaskProcessor {
      * @return A Bitmap with the heatmap overlaid on the frame
      */
     /**
-     * Creates an overlay bitmap using a pre-decoded frame bitmap and uint8 heatmap.
-     * Optimized for live streaming.
-     */
-    fun createOverlayFromBitmap(
-        heatmapBytes: ByteArray,
-        frame: Bitmap,
-        alpha: Float = 0.6f
-    ): Bitmap? {
-        if (frame.isRecycled) return null
-        try {
-            // 1. Decode heatmap from uint8 bytes (0-255)
-            val heatmap = FloatArray(224 * 224)
-            for (i in 0 until (224 * 224)) {
-                if (i < heatmapBytes.size) {
-                    heatmap[i] = (heatmapBytes[i].toInt() and 0xFF) / 255.0f
-                }
-            }
-
-            // 2. Create heatmap bitmap
-            val heatmapBitmap = createHeatmapBitmap(heatmap, 224, 224)
-            val scaledHeatmap = Bitmap.createScaledBitmap(
-                heatmapBitmap, frame.width, frame.height, true
-            )
-
-            // 3. Alpha blend
-            val result = Bitmap.createBitmap(frame.width, frame.height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(result)
-            canvas.drawBitmap(frame, 0f, 0f, null)
-
-            val paint = Paint().apply {
-                this.alpha = (alpha * 255).toInt()
-                this.isFilterBitmap = true
-            }
-            canvas.drawBitmap(scaledHeatmap, 0f, 0f, paint)
-
-            return result
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return null
-        }
-    }
-
-    /**
      * Creates an overlay bitmap by combining a float32 heatmap and a center frame.
      * Used for full video processing (non-streaming).
      */
@@ -105,6 +62,21 @@ class MaskProcessor {
         }
     }
 
+    private fun createHeatmapBitmap(values: FloatArray, w: Int, h: Int): Bitmap {
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(w * h)
+
+        for (i in 0 until (w * h)) {
+            val v = values[i].coerceIn(0f, 1f)
+            // Use 1.0 - v because the model typically returns high values for sources,
+            // and we want those to be red.
+            pixels[i] = jetColormap(1.0f - v)
+        }
+
+        bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
+        return bitmap
+    }
+
     /**
      * Stitches two bitmaps side-by-side.
      */
@@ -120,28 +92,42 @@ class MaskProcessor {
         return result
     }
 
-    private fun createHeatmapBitmap(values: FloatArray, w: Int, h: Int): Bitmap {
-        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val pixels = IntArray(w * h)
+    /**
+     * Creates a transparent heatmap bitmap that can be overlaid on the live camera preview.
+     * Alpha is proportional to the intensity of the sound at that pixel.
+     */
+    fun createTransparentHeatmap(
+        heatmapBytes: ByteArray,
+        width: Int = 224,
+        height: Int = 224
+    ): Bitmap? {
+        try {
+            val heatmap = FloatArray(width * height)
+            for (i in 0 until (width * height)) {
+                if (i < heatmapBytes.size) {
+                    heatmap[i] = (heatmapBytes[i].toInt() and 0xFF) / 255.0f
+                }
+            }
 
-        for (i in 0 until (w * h)) {
-            val v = values[i].coerceIn(0f, 1f)
-            // Use 1.0 - v because the model typically returns high values for sources,
-            // and we want those to be red (0.0 in JET colormap is red in some implementations,
-            // but usually 1.0 is red. We'll match the backend's JET mapping logic).
-            // In the backend: heatmap_norm = 1.0 - np.clip(heatmap_resized, 0.0, 1.0)
-            // So we do the same here.
-            pixels[i] = jetColormap(1.0f - v)
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val pixels = IntArray(width * height)
+
+            for (i in 0 until (width * height)) {
+                val v = heatmap[i].coerceIn(0f, 1f)
+                // Map the intensity to transparency: louder = more opaque
+                // We also amplify the intensity slightly for better visibility
+                val alpha = (v.coerceIn(0f, 1f) * 255).toInt()
+                pixels[i] = (alpha shl 24) or (jetColormap(1.0f - v) and 0x00FFFFFF)
+            }
+
+            bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+            return bitmap
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
         }
-
-        bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
-        return bitmap
     }
 
-    /**
-     * Simple JET colormap implementation
-     * Maps 0.0 -> Red, 1.0 -> Blue (matches backend logic)
-     */
     private fun jetColormap(v: Float): Int {
         val r = (clamp(1.5f - Math.abs(v - 0.75f) * 4f) * 255).toInt()
         val g = (clamp(1.5f - Math.abs(v - 0.5f) * 4f) * 255).toInt()
