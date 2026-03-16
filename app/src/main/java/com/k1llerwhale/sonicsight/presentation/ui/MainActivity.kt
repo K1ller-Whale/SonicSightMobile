@@ -4,7 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.media.AudioAttributes
@@ -266,9 +268,11 @@ class MainActivity : AppCompatActivity() {
     private fun processImageProxy(image: ImageProxy) {
         if (!isRecording) return
 
-        val timestampMs = System.currentTimeMillis() - recordingStartTime
+        val startTime = System.currentTimeMillis()
+        val timestampMs = startTime - recordingStartTime
+        val rotationDegrees = image.imageInfo.rotationDegrees
 
-        // Convert YUV to JPEG
+        // 1. Convert YUV_420_888 to NV21 ByteArray
         val yBuffer = image.planes[0].buffer
         val uBuffer = image.planes[1].buffer
         val vBuffer = image.planes[2].buffer
@@ -282,20 +286,42 @@ class MainActivity : AppCompatActivity() {
         vBuffer.get(nv21, ySize, vSize)
         uBuffer.get(nv21, ySize + vSize, uSize)
 
+        // 2. Create JPEG from NV21
         val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
         val out = ByteArrayOutputStream()
-        // Compress heavily to keep chunks small
         yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 70, out)
-        val jpegBytes = out.toByteArray()
+        var jpegBytes = out.toByteArray()
 
+        val prepTime = System.currentTimeMillis() - startTime
+
+        // 3. Handle Orientation: Rotate if necessary
+        // AI model expects an "upright" image to correctly split left/right
+        var rotateTime = 0L
+        if (rotationDegrees != 0) {
+            val rotateStart = System.currentTimeMillis()
+            val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+            val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+            val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+
+            val rotatedOut = ByteArrayOutputStream()
+            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 70, rotatedOut)
+            jpegBytes = rotatedOut.toByteArray()
+
+            bitmap.recycle()
+            rotatedBitmap.recycle()
+            rotateTime = System.currentTimeMillis() - rotateStart
+        }
+
+        // 4. Send to Backend
         val chunk = StreamChunk.newBuilder()
             .setTimestampMs(timestampMs)
             .setJpegFrame(ByteString.copyFrom(jpegBytes))
-            .setFrameWidth(image.width)
+            .setFrameWidth(image.width) // Note: Backend uses these to reconstruct
             .setFrameHeight(image.height)
             .build()
 
         viewModel.sendStreamChunk(chunk)
+        Log.d("SonicSightPerf", "Frame Prep: ${prepTime}ms, Rotate: ${rotateTime}ms, Total: ${System.currentTimeMillis() - startTime}ms")
     }
 
     @SuppressLint("MissingPermission")

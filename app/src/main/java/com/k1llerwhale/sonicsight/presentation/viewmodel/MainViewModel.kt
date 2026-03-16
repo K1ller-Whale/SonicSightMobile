@@ -84,6 +84,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun handleStreamResult(response: StreamResult) {
+        val receiveTime = System.currentTimeMillis()
         if (!response.success) {
             withContext(Dispatchers.Main) {
                 _uiState.value = UiState.Error(response.errorMessage)
@@ -96,6 +97,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        Log.d("SonicSightPerf", "Received Result for timestamp ${response.timestampMs}ms")
+
         // Emit audio chunks for playback
         if (response.leftAudioPcm.size() > 0) {
             leftAudioChunks.emit(response.leftAudioPcm.toByteArray())
@@ -104,6 +107,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Render visual heatmaps
         withContext(Dispatchers.IO) {
+            val renderStart = System.currentTimeMillis()
             val leftOverlay = maskProcessor.createOverlay(
                 response.leftHeatmap.toByteArray(),
                 response.centerFrameJpeg.toByteArray()
@@ -115,8 +119,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             if (leftOverlay != null && rightOverlay != null) {
                 val combinedBitmap = maskProcessor.stitchSideBySide(leftOverlay, rightOverlay)
+                val renderTime = System.currentTimeMillis() - renderStart
                 withContext(Dispatchers.Main) {
                     _streamResults.value = combinedBitmap
+                    Log.d("SonicSightPerf", "Total Result Latency: ${System.currentTimeMillis() - receiveTime}ms (Render: ${renderTime}ms)")
                 }
             }
         }

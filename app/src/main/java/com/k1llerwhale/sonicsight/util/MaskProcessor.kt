@@ -22,6 +22,7 @@ class MaskProcessor {
         alpha: Float = 0.6f
     ): Bitmap? {
         try {
+            // val start = System.currentTimeMillis()
             // 1. Decode heatmap from float32 bytes (Little Endian)
             val buffer = ByteBuffer.wrap(heatmapBytes).order(ByteOrder.LITTLE_ENDIAN)
             val heatmap = FloatArray(224 * 224)
@@ -53,6 +54,7 @@ class MaskProcessor {
             }
             canvas.drawBitmap(scaledHeatmap, 0f, 0f, paint)
 
+            // android.util.Log.d("SonicSightPerf", "  [MaskProcessor] createOverlay took ${System.currentTimeMillis() - start}ms")
             return result
         } catch (e: Exception) {
             e.printStackTrace()
