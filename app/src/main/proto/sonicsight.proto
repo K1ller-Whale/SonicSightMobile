@@ -92,11 +92,12 @@ message StreamChunk {
   // Used for syncing audio and video
   int64 timestamp_ms = 1;
 
-  // Raw JPEG-encoded video frame
+  // Raw JPEG-encoded video frames (spatially cropped 224x224)
   // Optional: A chunk might contain only audio
-  bytes jpeg_frame = 2;
+  bytes left_jpeg = 2;
+  bytes right_jpeg = 7;
 
-  // Frame width and height (required if jpeg_frame is present)
+  // Frame width and height (required if jpeg frames are present, usually 224)
   int32 frame_width = 3;
   int32 frame_height = 4;
 

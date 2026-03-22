@@ -8,7 +8,7 @@ import java.util.concurrent.TimeUnit
 object GrpcModule {
     // Update this to your server's IP address
     // Use raw IP or hostname only. NO "http://" or "https://"
-    private const val HOST = "192.168.99.191"
+    private const val HOST = "192.168.1.7"
     private const val PORT = 50051 // Use the gRPC port, not FastAPI port
 
     private val channel: ManagedChannel by lazy {

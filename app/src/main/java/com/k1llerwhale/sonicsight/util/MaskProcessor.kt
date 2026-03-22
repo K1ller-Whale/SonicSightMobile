@@ -98,13 +98,14 @@ class MaskProcessor {
      */
     fun createTransparentHeatmap(
         heatmapBytes: ByteArray,
-        width: Int = 224,
-        height: Int = 224
+        width: Int = 24,
+        height: Int = 24
     ): Bitmap? {
         try {
             val heatmap = FloatArray(width * height)
             for (i in 0 until (width * height)) {
                 if (i < heatmapBytes.size) {
+                    // For the Stream process, the backend encodes it as a byte array from uint8 (0-255)
                     heatmap[i] = (heatmapBytes[i].toInt() and 0xFF) / 255.0f
                 }
             }
@@ -114,14 +115,21 @@ class MaskProcessor {
 
             for (i in 0 until (width * height)) {
                 val v = heatmap[i].coerceIn(0f, 1f)
-                // Map the intensity to transparency: louder = more opaque
-                // We also amplify the intensity slightly for better visibility
-                val alpha = (v.coerceIn(0f, 1f) * 255).toInt()
+                // The model outputs 0 for silence, 1 for sound.
+                // We want the heatmap to be universally visible (like a thermal camera overlay),
+                // so we give it a base transparency of ~30%, and scale up to 80% for sound.
+                val alpha = (75 + (v * 130)).toInt().coerceIn(0, 255)
                 pixels[i] = (alpha shl 24) or (jetColormap(1.0f - v) and 0x00FFFFFF)
             }
 
             bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-            return bitmap
+            
+            // Explicitly scale up the 24x24 bitmap to a robust texture size (e.g. 240x240)
+            // This prevents Android's hardware accelerator from failing/blurring tiny textures
+            // when mapping them to large device screens using 'fitXY'
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 240, 240, true)
+            bitmap.recycle() // CRITICAL: Prevent Memory Leak
+            return scaledBitmap
         } catch (e: Exception) {
             e.printStackTrace()
             return null

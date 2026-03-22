@@ -182,7 +182,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         viewModel.streamResults.observe(this) { bitmap ->
+            val oldDrawable = binding.ivHeatmapOverlay.drawable as? android.graphics.drawable.BitmapDrawable
             binding.ivHeatmapOverlay.setImageBitmap(bitmap)
+            oldDrawable?.bitmap?.recycle()
+            
             binding.tvStatus.text = "Live Heatmap Active"
         }
     }
@@ -232,9 +235,8 @@ class MainActivity : AppCompatActivity() {
             preview.setSurfaceProvider(binding.viewFinder.surfaceProvider)
 
             val imageAnalysis = ImageAnalysis.Builder()
-                // Target low resolution matching our model (256x256 scaled down)
-                // 480x480 is a standard safe size
-                .setTargetResolution(android.util.Size(480, 480))
+                // Target 16:9 landscape resolution (720p is universally supported and fast/safe)
+                .setTargetResolution(android.util.Size(1280, 720))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
 
@@ -272,55 +274,40 @@ class MainActivity : AppCompatActivity() {
         val timestampMs = startTime - recordingStartTime
         val rotationDegrees = image.imageInfo.rotationDegrees
 
-        // 1. Convert YUV_420_888 to NV21 ByteArray
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
-
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
-
-        val nv21 = ByteArray(ySize + uSize + vSize)
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
-
-        // 2. Create JPEG from NV21
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 70, out)
-        var jpegBytes = out.toByteArray()
-
-        val prepTime = System.currentTimeMillis() - startTime
-
-        // 3. Handle Orientation: Rotate if necessary
-        var rotateTime = 0L
-        if (rotationDegrees != 0) {
-            val rotateStart = System.currentTimeMillis()
-            val originalBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-            val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-            val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
-
-            val rotatedOut = ByteArrayOutputStream()
-            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 70, rotatedOut)
-            jpegBytes = rotatedOut.toByteArray()
-
-            originalBitmap.recycle()
-            rotatedBitmap.recycle()
-            rotateTime = System.currentTimeMillis() - rotateStart
+        // 1. Convert YUV to Bitmap natively
+        var bitmap = com.k1llerwhale.sonicsight.util.ImageTransform.imageProxyToBitmap(image)
+        if (bitmap == null) {
+            return
         }
 
-        // 4. Send to Backend
+        // 2. Handle Orientation: Rotate if necessary
+        if (rotationDegrees != 0) {
+            val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+            val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            if (rotatedBitmap != bitmap) {
+                bitmap.recycle()
+                bitmap = rotatedBitmap
+            }
+        }
+        
+        val prepStart = System.currentTimeMillis()
+
+        // 3. Process, Split, Resize, Crop and Compress exactly like the Python backend did
+        val (leftJpegBytes, rightJpegBytes) = com.k1llerwhale.sonicsight.util.ImageTransform.processAndCompressHalves(bitmap)
+        val prepTime = System.currentTimeMillis() - prepStart
+        bitmap.recycle()
+
+        // 4. Send to Backend without decoding overhead
         val chunk = StreamChunk.newBuilder()
             .setTimestampMs(timestampMs)
-            .setJpegFrame(ByteString.copyFrom(jpegBytes))
-            .setFrameWidth(image.width)
-            .setFrameHeight(image.height)
+            .setLeftJpeg(ByteString.copyFrom(leftJpegBytes))
+            .setRightJpeg(ByteString.copyFrom(rightJpegBytes))
+            .setFrameWidth(224)
+            .setFrameHeight(224)
             .build()
 
         viewModel.sendStreamChunk(chunk)
-        Log.d("SonicSightPerf", "Frame Prep: ${prepTime}ms, Rotate: ${rotateTime}ms, Total: ${System.currentTimeMillis() - startTime}ms")
+        Log.d("SonicSightPerf", "Prep & Compress: ${prepTime}ms, Total: ${System.currentTimeMillis() - startTime}ms")
     }
 
     @SuppressLint("MissingPermission")
