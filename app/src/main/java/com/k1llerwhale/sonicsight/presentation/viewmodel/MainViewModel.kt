@@ -108,16 +108,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             // We use the heatmap data to create a transparent overlay
             // that will be placed directly on top of the camera preview.
-            // Since the backend now sends the same mask for left/right in live mode,
-            // we only need one overlay.
-            val transparentHeatmap = maskProcessor.createTransparentHeatmap(
-                response.leftHeatmap.toByteArray()
-            )
+            // Since the backend outputs separate stereoscopic masks, we render and stitch them natively.
+            val leftTransparent = maskProcessor.createTransparentHeatmap(response.leftHeatmap.toByteArray())
+            val rightTransparent = maskProcessor.createTransparentHeatmap(response.rightHeatmap.toByteArray())
 
-            if (transparentHeatmap != null) {
+            if (leftTransparent != null && rightTransparent != null) {
+                // Stitch stereoscopic views horizontally natively on Android
+                val stitched = maskProcessor.stitchSideBySide(leftTransparent, rightTransparent)
                 val renderTime = System.currentTimeMillis() - renderStart
                 withContext(Dispatchers.Main) {
-                    _streamResults.value = transparentHeatmap
+                    _streamResults.value = stitched
                     Log.d("SonicSightPerf", "Total Result Latency: ${System.currentTimeMillis() - receiveTime}ms (Render: ${renderTime}ms)")
                 }
             }
