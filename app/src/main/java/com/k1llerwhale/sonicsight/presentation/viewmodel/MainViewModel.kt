@@ -115,11 +115,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (leftTransparent != null && rightTransparent != null) {
                 // Stitch stereoscopic views horizontally natively on Android
                 val stitched = maskProcessor.stitchSideBySide(leftTransparent, rightTransparent)
+                // Recycle intermediate bitmaps immediately to prevent memory leak
+                leftTransparent.recycle()
+                rightTransparent.recycle()
                 val renderTime = System.currentTimeMillis() - renderStart
                 withContext(Dispatchers.Main) {
                     _streamResults.value = stitched
                     Log.d("SonicSightPerf", "Total Result Latency: ${System.currentTimeMillis() - receiveTime}ms (Render: ${renderTime}ms)")
                 }
+            } else {
+                // Recycle if only one was created
+                leftTransparent?.recycle()
+                rightTransparent?.recycle()
             }
         }
     }

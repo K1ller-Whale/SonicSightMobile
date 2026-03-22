@@ -95,7 +95,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun cleanupAudioPlayback() {
+        playbackJobLeft?.cancel()
+        playbackJobRight?.cancel()
+        playbackJobLeft = null
+        playbackJobRight = null
+
+        try { audioTrackLeft?.stop() } catch (_: Exception) {}
+        audioTrackLeft?.release()
+        audioTrackLeft = null
+
+        try { audioTrackRight?.stop() } catch (_: Exception) {}
+        audioTrackRight?.release()
+        audioTrackRight = null
+    }
+
     private fun setupAudioPlayback() {
+        // Clean up any previous playback resources first
+        cleanupAudioPlayback()
+
         val minBufferSize = AudioTrack.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_MONO,
@@ -182,10 +200,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         viewModel.streamResults.observe(this) { bitmap ->
-            val oldDrawable = binding.ivHeatmapOverlay.drawable as? android.graphics.drawable.BitmapDrawable
+            // Don't recycle the old bitmap here — it may still be in the ImageView's
+            // draw pipeline, causing 'Canvas: trying to use a recycled bitmap' crashes.
+            // The GC will reclaim it once the ImageView releases its reference.
             binding.ivHeatmapOverlay.setImageBitmap(bitmap)
-            oldDrawable?.bitmap?.recycle()
-            
             binding.tvStatus.text = "Live Heatmap Active"
         }
     }
@@ -347,11 +365,14 @@ class MainActivity : AppCompatActivity() {
     private fun stopLiveStreaming() {
         isRecording = false
 
-        // Stop audio
+        // Stop audio capture
         audioJob?.cancel()
         audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
+
+        // Stop audio playback
+        cleanupAudioPlayback()
 
         // Stop gRPC stream
         val finalChunk = StreamChunk.newBuilder()
@@ -384,6 +405,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        cleanupAudioPlayback()
         cameraExecutor.shutdown()
         audioRecord?.release()
     }
