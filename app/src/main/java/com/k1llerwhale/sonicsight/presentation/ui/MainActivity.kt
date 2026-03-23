@@ -371,6 +371,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopLiveStreaming() {
         isRecording = false
+        binding.btnRecord.isEnabled = false // Disable to prevent rapid toggling
 
         // Stop audio capture synchronously to release mic immediately
         val currentAudioJob = audioJob
@@ -394,6 +395,11 @@ class MainActivity : AppCompatActivity() {
 
         // Revert camera to simple preview
         startCameraPreview()
+
+        // Re-enable button after HAL has time to clean up
+        binding.btnRecord.postDelayed({
+            binding.btnRecord.isEnabled = true
+        }, 500)
     }
 
     private fun requestPermissions() {
