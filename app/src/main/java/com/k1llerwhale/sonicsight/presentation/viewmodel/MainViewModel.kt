@@ -68,6 +68,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .catch { e ->
                     _uiState.postValue(UiState.Error("Stream error: ${e.message}"))
                 }
+                .conflate() // Drop stale results when busy — prevents queue buildup and burst/freeze cycles
                 .collect { response ->
                     handleStreamResult(response)
                 }
@@ -96,10 +97,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         Log.d("SonicSightPerf", "Received Result for timestamp ${response.timestampMs}ms")
 
-        // Emit audio chunks for playback
+        // Emit audio chunks for playback (non-blocking — drop if buffer full rather than suspend)
         if (response.leftAudioPcm.size() > 0) {
-            leftAudioChunks.emit(response.leftAudioPcm.toByteArray())
-            rightAudioChunks.emit(response.rightAudioPcm.toByteArray())
+            leftAudioChunks.tryEmit(response.leftAudioPcm.toByteArray())
+            rightAudioChunks.tryEmit(response.rightAudioPcm.toByteArray())
         }
 
         // Render visual heatmaps using LOCAL cached frame (transparent overlay)
