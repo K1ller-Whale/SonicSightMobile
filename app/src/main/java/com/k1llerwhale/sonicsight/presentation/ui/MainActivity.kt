@@ -23,6 +23,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -30,6 +31,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import com.google.protobuf.ByteString
+import com.k1llerwhale.sonicsight.data.api.GrpcModule
 import com.k1llerwhale.sonicsight.databinding.ActivityMainBinding
 import com.k1llerwhale.sonicsight.grpc.StreamChunk
 import com.k1llerwhale.sonicsight.presentation.viewmodel.MainViewModel
@@ -157,7 +159,7 @@ class MainActivity : AppCompatActivity() {
         audioTrackLeft?.play()
         audioTrackRight?.play()
 
-        playbackJobLeft = CoroutineScope(Dispatchers.IO).launch {
+        playbackJobLeft = lifecycleScope.launch(Dispatchers.IO) {
             viewModel.leftAudioChunks.collect { chunk ->
                 if (isActive) {
                     audioTrackLeft?.write(chunk, 0, chunk.size)
@@ -165,7 +167,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        playbackJobRight = CoroutineScope(Dispatchers.IO).launch {
+        playbackJobRight = lifecycleScope.launch(Dispatchers.IO) {
             viewModel.rightAudioChunks.collect { chunk ->
                 if (isActive) {
                     audioTrackRight?.write(chunk, 0, chunk.size)
@@ -344,19 +346,24 @@ class MainActivity : AppCompatActivity() {
 
         audioRecord?.startRecording()
 
-        audioJob = CoroutineScope(Dispatchers.IO).launch {
+        audioJob = lifecycleScope.launch(Dispatchers.IO) {
             val audioBuffer = ByteArray(optimalBufferSize)
             while (isActive && isRecording) {
-                val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
-                if (readResult > 0) {
-                    val timestampMs = System.currentTimeMillis() - recordingStartTime
+                try {
+                    val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
+                    if (readResult > 0) {
+                        val timestampMs = System.currentTimeMillis() - recordingStartTime
 
-                    val chunk = StreamChunk.newBuilder()
-                        .setTimestampMs(timestampMs)
-                        .setAudioPcm(ByteString.copyFrom(audioBuffer, 0, readResult))
-                        .build()
+                        val chunk = StreamChunk.newBuilder()
+                            .setTimestampMs(timestampMs)
+                            .setAudioPcm(ByteString.copyFrom(audioBuffer, 0, readResult))
+                            .build()
 
-                    viewModel.sendStreamChunk(chunk)
+                        viewModel.sendStreamChunk(chunk)
+                    }
+                } catch (e: Exception) {
+                    Log.e("SonicSight", "Audio capture error: ${e.message}")
+                    break
                 }
             }
         }
@@ -365,11 +372,17 @@ class MainActivity : AppCompatActivity() {
     private fun stopLiveStreaming() {
         isRecording = false
 
-        // Stop audio capture
-        audioJob?.cancel()
-        audioRecord?.stop()
-        audioRecord?.release()
+        // Stop audio capture safely to avoid race conditions
+        val currentAudioRecord = audioRecord
+        val currentAudioJob = audioJob
         audioRecord = null
+        audioJob = null
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            currentAudioJob?.cancel()
+            try { currentAudioRecord?.stop() } catch (e: Exception) {}
+            currentAudioRecord?.release()
+        }
 
         // Stop audio playback
         cleanupAudioPlayback()
@@ -408,6 +421,7 @@ class MainActivity : AppCompatActivity() {
         cleanupAudioPlayback()
         cameraExecutor.shutdown()
         audioRecord?.release()
+        GrpcModule.shutdown()
     }
 
     companion object {
