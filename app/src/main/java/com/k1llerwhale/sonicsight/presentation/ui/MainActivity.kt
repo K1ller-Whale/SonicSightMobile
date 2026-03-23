@@ -372,17 +372,15 @@ class MainActivity : AppCompatActivity() {
     private fun stopLiveStreaming() {
         isRecording = false
 
-        // Stop audio capture safely to avoid race conditions
-        val currentAudioRecord = audioRecord
+        // Stop audio capture synchronously to release mic immediately
         val currentAudioJob = audioJob
-        audioRecord = null
+        val currentAudioRecord = audioRecord
         audioJob = null
+        audioRecord = null
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            currentAudioJob?.cancel()
-            try { currentAudioRecord?.stop() } catch (e: Exception) {}
-            currentAudioRecord?.release()
-        }
+        currentAudioJob?.cancel()
+        try { currentAudioRecord?.stop() } catch (e: Exception) {}
+        currentAudioRecord?.release()
 
         // Stop audio playback
         cleanupAudioPlayback()
