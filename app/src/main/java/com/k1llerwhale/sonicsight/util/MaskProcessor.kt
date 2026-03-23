@@ -68,9 +68,9 @@ class MaskProcessor {
 
         for (i in 0 until (w * h)) {
             val v = values[i].coerceIn(0f, 1f)
-            // Use 1.0 - v because the model typically returns high values for sources,
-            // and we want those to be red.
-            pixels[i] = jetColormap(1.0f - v)
+            // The model returns high values (near 1.0) for sound sources,
+            // jetColormap(1.0) returns red, jetColormap(0.0) returns blue.
+            pixels[i] = jetColormap(v)
         }
 
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
@@ -116,10 +116,10 @@ class MaskProcessor {
             for (i in 0 until (width * height)) {
                 val v = heatmap[i].coerceIn(0f, 1f)
                 // The model outputs 0 for silence, 1 for sound.
-                // We want the heatmap to be universally visible (like a thermal camera overlay),
-                // so we give it a base transparency of ~30%, and scale up to 80% for sound.
-                val alpha = (75 + (v * 130)).toInt().coerceIn(0, 255)
-                pixels[i] = (alpha shl 24) or (jetColormap(1.0f - v) and 0x00FFFFFF)
+                // We want silence (v=0) to be completely transparent so the screen doesn't turn red/blue,
+                // and sound (v=1) to be nicely visible (alpha 180).
+                val alpha = (v * 180).toInt().coerceIn(0, 255)
+                pixels[i] = (alpha shl 24) or (jetColormap(v) and 0x00FFFFFF)
             }
 
             bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
