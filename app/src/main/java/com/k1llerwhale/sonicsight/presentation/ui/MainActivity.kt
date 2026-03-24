@@ -18,6 +18,8 @@ import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.CountDownTimer
 import android.util.Log
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +37,7 @@ import com.k1llerwhale.sonicsight.data.api.GrpcModule
 import com.k1llerwhale.sonicsight.databinding.ActivityMainBinding
 import com.k1llerwhale.sonicsight.grpc.StreamChunk
 import com.k1llerwhale.sonicsight.presentation.viewmodel.MainViewModel
+import com.k1llerwhale.sonicsight.presentation.viewmodel.PlaybackMode
 import com.k1llerwhale.sonicsight.presentation.viewmodel.UiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +72,8 @@ class MainActivity : AppCompatActivity() {
     private var audioTrackRight: AudioTrack? = null
     private var playbackJobLeft: Job? = null
     private var playbackJobRight: Job? = null
+    @Volatile
+    private var currentPlaybackMode: PlaybackMode = PlaybackMode.BOTH
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,6 +84,7 @@ class MainActivity : AppCompatActivity() {
 
         // 1. Observe ViewModel State
         observeUiState()
+        setupOverlayTapSelection()
 
         // 2. Check Permissions & Start Camera Preview
         if (allPermissionsGranted()) {
@@ -158,6 +164,7 @@ class MainActivity : AppCompatActivity() {
 
         audioTrackLeft?.play()
         audioTrackRight?.play()
+        applyPlaybackMode(currentPlaybackMode)
 
         playbackJobLeft = lifecycleScope.launch(Dispatchers.IO) {
             viewModel.leftAudioChunks.collect { chunk ->
@@ -176,6 +183,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun applyPlaybackMode(mode: PlaybackMode) {
+        currentPlaybackMode = mode
+        when (mode) {
+            PlaybackMode.BOTH -> {
+                audioTrackLeft?.setVolume(1.0f)
+                audioTrackRight?.setVolume(1.0f)
+            }
+            PlaybackMode.LEFT_ONLY -> {
+                audioTrackLeft?.setVolume(1.0f)
+                audioTrackRight?.setVolume(0.0f)
+            }
+            PlaybackMode.RIGHT_ONLY -> {
+                audioTrackLeft?.setVolume(0.0f)
+                audioTrackRight?.setVolume(1.0f)
+            }
+        }
+    }
+
+    private fun setupOverlayTapSelection() {
+        binding.ivHeatmapOverlay.setOnTouchListener { view, event ->
+            if (!isRecording) return@setOnTouchListener false
+
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> true
+                MotionEvent.ACTION_UP -> {
+                    if (view.width <= 0) return@setOnTouchListener false
+
+                    val tappedMode = if (event.x < (view.width / 2f)) {
+                        PlaybackMode.LEFT_ONLY
+                    } else {
+                        PlaybackMode.RIGHT_ONLY
+                    }
+
+                    val nextMode = if (currentPlaybackMode == tappedMode) {
+                        PlaybackMode.BOTH
+                    } else {
+                        tappedMode
+                    }
+                    // Give instant physical feedback for source selection.
+                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    viewModel.setPlaybackMode(nextMode)
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
     private fun observeUiState() {
         viewModel.uiState.observe(this) { state ->
             when(state) {
@@ -184,13 +239,15 @@ class MainActivity : AppCompatActivity() {
                     binding.btnRecord.isEnabled = true
                     binding.btnRecord.text = "Start Live Processing"
                     binding.ivHeatmapOverlay.visibility = View.GONE
+                    binding.tvAudioSelection.visibility = View.GONE
                 }
                 is UiState.Streaming -> {
                     binding.progressBar.visibility = View.GONE
                     binding.btnRecord.isEnabled = true
                     binding.btnRecord.text = "Stop Processing"
-                    binding.tvStatus.text = "Streaming... (Waiting for 6s buffer)"
+                    binding.tvStatus.text = "Live Heatmap Active - Tap left/right overlay to solo source"
                     binding.ivHeatmapOverlay.visibility = View.VISIBLE
+                    binding.tvAudioSelection.visibility = View.VISIBLE
                 }
                 is UiState.Error -> {
                     stopLiveStreaming()
@@ -207,6 +264,23 @@ class MainActivity : AppCompatActivity() {
             // The GC will reclaim it once the ImageView releases its reference.
             binding.ivHeatmapOverlay.setImageBitmap(bitmap)
             binding.tvStatus.text = "Live Heatmap Active"
+        }
+
+        viewModel.playbackMode.observe(this) { mode ->
+            applyPlaybackMode(mode)
+            binding.tvAudioSelection.text = when (mode) {
+                PlaybackMode.BOTH -> "Audio: BOTH"
+                PlaybackMode.LEFT_ONLY -> "Audio: LEFT"
+                PlaybackMode.RIGHT_ONLY -> "Audio: RIGHT"
+            }
+            if (isRecording) {
+                val toastText = when (mode) {
+                    PlaybackMode.BOTH -> "Audio mode: BOTH"
+                    PlaybackMode.LEFT_ONLY -> "Audio mode: LEFT"
+                    PlaybackMode.RIGHT_ONLY -> "Audio mode: RIGHT"
+                }
+                Toast.makeText(this, toastText, Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -241,6 +315,7 @@ class MainActivity : AppCompatActivity() {
         recordingStartTime = System.currentTimeMillis()
 
         // Setup audio playback receivers
+        viewModel.setPlaybackMode(PlaybackMode.BOTH)
         setupAudioPlayback()
 
         // Tell ViewModel to open gRPC stream
@@ -333,8 +408,10 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("MissingPermission")
     private fun startAudioCapture() {
         val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-        // Ensure buffer is large enough for ~0.25s of audio (11025 * 0.25 * 2 bytes = ~5512 bytes)
-        val optimalBufferSize = maxOf(bufferSize, 8192)
+        // Read/send near frame cadence (~125ms @ 8fps) for smoother stream timing.
+        val samplesPerFrame = SAMPLE_RATE / 8
+        val bytesPerFrame = samplesPerFrame * 2 // PCM16 mono
+        val optimalBufferSize = maxOf(bufferSize, bytesPerFrame * 2)
 
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.MIC,
@@ -347,7 +424,7 @@ class MainActivity : AppCompatActivity() {
         audioRecord?.startRecording()
 
         audioJob = lifecycleScope.launch(Dispatchers.IO) {
-            val audioBuffer = ByteArray(optimalBufferSize)
+            val audioBuffer = ByteArray(bytesPerFrame)
             while (isActive && isRecording) {
                 try {
                     val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0

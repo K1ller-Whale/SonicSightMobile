@@ -33,6 +33,12 @@ sealed class UiState {
     ) : UiState()
 }
 
+enum class PlaybackMode {
+    BOTH,
+    LEFT_ONLY,
+    RIGHT_ONLY
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = GrpcVideoRepository()
@@ -53,8 +59,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val leftAudioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 64)
     val rightAudioChunks = MutableSharedFlow<ByteArray>(replay = 0, extraBufferCapacity = 64)
 
+    private val _playbackMode = MutableLiveData(PlaybackMode.BOTH)
+    val playbackMode: LiveData<PlaybackMode> = _playbackMode
+
     fun setProcessing() {
         _uiState.value = UiState.Processing
+    }
+
+    fun setPlaybackMode(mode: PlaybackMode) {
+        _playbackMode.value = mode
     }
 
     /**
@@ -68,7 +81,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .catch { e ->
                     _uiState.postValue(UiState.Error("Stream error: ${e.message}"))
                 }
-                .conflate() // Drop stale results when busy — prevents queue buildup and burst/freeze cycles
                 .collect { response ->
                     handleStreamResult(response)
                 }
@@ -99,8 +111,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Emit audio chunks for playback (non-blocking — drop if buffer full rather than suspend)
         if (response.leftAudioPcm.size() > 0) {
-            leftAudioChunks.tryEmit(response.leftAudioPcm.toByteArray())
-            rightAudioChunks.tryEmit(response.rightAudioPcm.toByteArray())
+            leftAudioChunks.emit(response.leftAudioPcm.toByteArray())
+            rightAudioChunks.emit(response.rightAudioPcm.toByteArray())
         }
 
         // Render visual heatmaps using LOCAL cached frame (transparent overlay)
