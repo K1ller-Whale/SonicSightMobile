@@ -49,6 +49,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class MainActivity : AppCompatActivity() {
 
@@ -169,7 +171,13 @@ class MainActivity : AppCompatActivity() {
         playbackJobLeft = lifecycleScope.launch(Dispatchers.IO) {
             viewModel.leftAudioChunks.collect { chunk ->
                 if (isActive) {
-                    audioTrackLeft?.write(chunk, 0, chunk.size)
+                    val track = audioTrackLeft ?: return@collect
+                    if (track.state == AudioTrack.STATE_INITIALIZED && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                        val result = track.write(chunk, 0, chunk.size)
+                        if (result < 0) {
+                            Log.e("SonicSight", "AudioTrack write error Left: $result")
+                        }
+                    }
                 }
             }
         }
@@ -177,7 +185,13 @@ class MainActivity : AppCompatActivity() {
         playbackJobRight = lifecycleScope.launch(Dispatchers.IO) {
             viewModel.rightAudioChunks.collect { chunk ->
                 if (isActive) {
-                    audioTrackRight?.write(chunk, 0, chunk.size)
+                    val track = audioTrackRight ?: return@collect
+                    if (track.state == AudioTrack.STATE_INITIALIZED && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                        val result = track.write(chunk, 0, chunk.size)
+                        if (result < 0) {
+                            Log.e("SonicSight", "AudioTrack write error Right: $result")
+                        }
+                    }
                 }
             }
         }
