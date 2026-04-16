@@ -17,6 +17,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.CountDownTimer
+import android.os.SystemClock
 import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -326,7 +327,7 @@ class MainActivity : AppCompatActivity() {
         if (!allPermissionsGranted()) return
 
         isRecording = true
-        recordingStartTime = System.currentTimeMillis()
+        recordingStartTime = SystemClock.elapsedRealtime()
 
         // Setup audio playback receivers
         viewModel.setPlaybackMode(PlaybackMode.BOTH)
@@ -352,7 +353,7 @@ class MainActivity : AppCompatActivity() {
             // Throttle to 8 FPS manually
             var lastAnalyzedTimestamp = 0L
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                val currentTimestamp = System.currentTimeMillis()
+                val currentTimestamp = SystemClock.elapsedRealtime()
                 if (currentTimestamp - lastAnalyzedTimestamp >= 125) { // 1000ms / 8fps = 125ms
                     processImageProxy(imageProxy)
                     lastAnalyzedTimestamp = currentTimestamp
@@ -379,7 +380,7 @@ class MainActivity : AppCompatActivity() {
     private fun processImageProxy(image: ImageProxy) {
         if (!isRecording) return
 
-        val startTime = System.currentTimeMillis()
+        val startTime = SystemClock.elapsedRealtime()
         val timestampMs = startTime - recordingStartTime
         val rotationDegrees = image.imageInfo.rotationDegrees
 
@@ -416,7 +417,7 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         viewModel.sendStreamChunk(chunk)
-        Log.d("SonicSightPerf", "Prep & Compress: ${prepTime}ms, Total: ${System.currentTimeMillis() - startTime}ms")
+        Log.d("SonicSightPerf", "Prep & Compress: ${prepTime}ms, Total: ${SystemClock.elapsedRealtime() - startTime}ms")
     }
 
     @SuppressLint("MissingPermission")
@@ -443,7 +444,7 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
                     if (readResult > 0) {
-                        val timestampMs = System.currentTimeMillis() - recordingStartTime
+                        val timestampMs = SystemClock.elapsedRealtime() - recordingStartTime
 
                         val chunk = StreamChunk.newBuilder()
                             .setTimestampMs(timestampMs)
