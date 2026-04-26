@@ -123,8 +123,8 @@ message StreamResult {
   bytes left_audio_pcm = 4;
   bytes right_audio_pcm = 5;
 
-  // Heatmap masks as raw float32 arrays
-  // Shape: [IMG_SIZE x IMG_SIZE] = [224 x 224] = 50176 float32 values
+  // Heatmap masks as uint8 arrays (streaming) or float32 (full processing)
+  // Streaming shape: [24 x 24] = 576 bytes (uint8)
   bytes left_heatmap = 6;
   bytes right_heatmap = 7;
 
@@ -134,4 +134,9 @@ message StreamResult {
 
   // Indicates if this is just a buffering acknowledgment (no results yet)
   bool is_buffering = 9;
+
+  // Performance metrics (optional)
+  int64 inference_time_ms = 10;
+  int64 post_processing_time_ms = 11;
+  int64 total_server_time_ms = 12;
 }
