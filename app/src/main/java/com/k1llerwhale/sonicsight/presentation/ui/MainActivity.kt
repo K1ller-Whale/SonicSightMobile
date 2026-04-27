@@ -51,6 +51,7 @@ import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.nio.ByteBuffer
+import com.k1llerwhale.sonicsight.util.JitterBuffer
 import java.nio.ByteOrder
 
 class MainActivity : AppCompatActivity() {
@@ -73,6 +74,8 @@ class MainActivity : AppCompatActivity() {
     // Audio Playback
     private var audioTrackLeft: AudioTrack? = null
     private var audioTrackRight: AudioTrack? = null
+    private var leftJitterBuffer: JitterBuffer? = null
+    private var rightJitterBuffer: JitterBuffer? = null
     private var playbackJobLeft: Job? = null
     private var playbackJobRight: Job? = null
     @Volatile
@@ -111,6 +114,12 @@ class MainActivity : AppCompatActivity() {
         playbackJobRight?.cancel()
         playbackJobLeft = null
         playbackJobRight = null
+
+        // Stop jitter buffers first (they own the AudioTrack.write loop)
+        leftJitterBuffer?.stop()
+        rightJitterBuffer?.stop()
+        leftJitterBuffer = null
+        rightJitterBuffer = null
 
         try { audioTrackLeft?.stop() } catch (_: Exception) {}
         audioTrackLeft?.release()
@@ -165,20 +174,32 @@ class MainActivity : AppCompatActivity() {
         // Route right channel audio strictly to the right speaker/headphone
         audioTrackRight?.setStereoVolume(0.0f, 1.0f)
 
-        audioTrackLeft?.play()
-        audioTrackRight?.play()
+        // Don't call audioTrack.play() here — JitterBuffer will call it after initial buffering
         applyPlaybackMode(currentPlaybackMode)
 
+        // Create jitter buffers that absorb network jitter and feed AudioTrack at a steady rate.
+        // Initial buffer of 200ms adapts upward if underruns are detected.
+        leftJitterBuffer = JitterBuffer(
+            audioTrack = audioTrackLeft!!,
+            sampleRate = SAMPLE_RATE,
+            initialBufferMs = 200,
+            maxBufferMs = 1500
+        )
+        rightJitterBuffer = JitterBuffer(
+            audioTrack = audioTrackRight!!,
+            sampleRate = SAMPLE_RATE,
+            initialBufferMs = 200,
+            maxBufferMs = 1500
+        )
+
+        leftJitterBuffer?.start()
+        rightJitterBuffer?.start()
+
+        // Collectors just enqueue into jitter buffers — non-blocking, no direct AudioTrack access
         playbackJobLeft = lifecycleScope.launch(Dispatchers.IO) {
             viewModel.leftAudioChunks.collect { chunk ->
                 if (isActive) {
-                    val track = audioTrackLeft ?: return@collect
-                    if (track.state == AudioTrack.STATE_INITIALIZED && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                        val result = track.write(chunk, 0, chunk.size)
-                        if (result < 0) {
-                            Log.e("SonicSight", "AudioTrack write error Left: $result")
-                        }
-                    }
+                    leftJitterBuffer?.write(chunk)
                 }
             }
         }
@@ -186,13 +207,7 @@ class MainActivity : AppCompatActivity() {
         playbackJobRight = lifecycleScope.launch(Dispatchers.IO) {
             viewModel.rightAudioChunks.collect { chunk ->
                 if (isActive) {
-                    val track = audioTrackRight ?: return@collect
-                    if (track.state == AudioTrack.STATE_INITIALIZED && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                        val result = track.write(chunk, 0, chunk.size)
-                        if (result < 0) {
-                            Log.e("SonicSight", "AudioTrack write error Right: $result")
-                        }
-                    }
+                    rightJitterBuffer?.write(chunk)
                 }
             }
         }

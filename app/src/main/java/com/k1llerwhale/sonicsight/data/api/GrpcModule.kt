@@ -16,6 +16,8 @@ object GrpcModule {
             .usePlaintext() // Use insecure connection for development
             .maxInboundMessageSize(16 * 1024 * 1024) // 16MB
             .keepAliveTime(30, TimeUnit.SECONDS)
+            .keepAliveWithoutCalls(true)  // Detect dead connections even when idle
+            .keepAliveTimeout(10, TimeUnit.SECONDS)  // Fail fast on unresponsive server
             .build()
     }
 
