@@ -62,6 +62,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _playbackMode = MutableLiveData(PlaybackMode.BOTH)
     val playbackMode: LiveData<PlaybackMode> = _playbackMode
 
+    // Sequence tracking for gap detection
+    private var lastSeqNumber = -1
+    private var lastResultTimeMs = 0L
+
     fun setProcessing() {
         _uiState.value = UiState.Processing
     }
@@ -107,9 +111,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        Log.d("SonicSightPerf", "Received Result for timestamp ${response.timestampMs}ms")
+        // Connection health monitoring
+        if (lastResultTimeMs > 0) {
+            val gap = receiveTime - lastResultTimeMs
+            if (gap > 500) {
+                Log.w("SonicSight", "Network degraded: ${gap}ms between results")
+            }
+        }
+        lastResultTimeMs = receiveTime
 
-        // Emit audio chunks for playback (non-blocking — drop if buffer full rather than suspend)
+        Log.d("SonicSightPerf", "Received Result seq=${response.sequenceNumber} timestamp=${response.timestampMs}ms")
+
+        // Gap detection: if sequence numbers skip, insert silence to maintain playback timing.
+        // This prevents the audio timeline from compressing when results are genuinely lost.
+        if (response.leftAudioPcm.size() > 0 && lastSeqNumber >= 0 && response.sequenceNumber > lastSeqNumber + 1) {
+            val missedResults = response.sequenceNumber - lastSeqNumber - 1
+            // Use audioSampleCount from the current result as an estimate for missed chunk sizes
+            val samplesPerResult = if (response.audioSampleCount > 0) response.audioSampleCount else 1250
+            val silenceBytes = missedResults * samplesPerResult * 2  // PCM16 = 2 bytes/sample
+            val silence = ByteArray(silenceBytes)
+            leftAudioChunks.emit(silence)
+            rightAudioChunks.emit(silence)
+            Log.w("SonicSight", "Gap detected: inserted $missedResults silence chunks (seq ${lastSeqNumber + 1}..${response.sequenceNumber - 1})")
+        }
+        if (response.sequenceNumber > 0) {
+            lastSeqNumber = response.sequenceNumber
+        }
+
+        // Emit audio chunks for playback
         if (response.leftAudioPcm.size() > 0) {
             leftAudioChunks.emit(response.leftAudioPcm.toByteArray())
             rightAudioChunks.emit(response.rightAudioPcm.toByteArray())
@@ -215,5 +244,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resetState() {
         _uiState.value = UiState.Idle
+        lastSeqNumber = -1
+        lastResultTimeMs = 0L
     }
 }

@@ -139,4 +139,13 @@ message StreamResult {
   int64 inference_time_ms = 10;
   int64 post_processing_time_ms = 11;
   int64 total_server_time_ms = 12;
+
+  // Monotonically increasing sequence number for gap detection.
+  // Allows the client to detect missed/dropped results and insert
+  // compensating silence into the jitter buffer.
+  int32 sequence_number = 13;
+
+  // Number of PCM16 samples in each audio channel (left/right).
+  // Allows the client to know exactly how much audio time this result covers.
+  int32 audio_sample_count = 14;
 }
