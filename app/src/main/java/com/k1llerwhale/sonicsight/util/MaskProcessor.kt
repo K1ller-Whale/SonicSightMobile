@@ -6,16 +6,9 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.pow
 
 class MaskProcessor {
-    /**
-     * Creates an overlay bitmap by combining a heatmap and a center frame.
-     *
-     * @param heatmapBytes Raw float32 bytes of the 224x224 heatmap
-     * @param frameJpeg JPEG-encoded center frame
-     * @param alpha Transparency of the heatmap overlay (0.0 to 1.0)
-     * @return A Bitmap with the heatmap overlaid on the frame
-     */
     /**
      * Creates an overlay bitmap by combining a float32 heatmap and a center frame.
      * Used for full video processing (non-streaming).
@@ -68,8 +61,6 @@ class MaskProcessor {
 
         for (i in 0 until (w * h)) {
             val v = values[i].coerceIn(0f, 1f)
-            // The model returns high values (near 1.0) for sound sources,
-            // jetColormap(1.0) returns red, jetColormap(0.0) returns blue.
             pixels[i] = jetColormap(v)
         }
 
@@ -93,42 +84,61 @@ class MaskProcessor {
     }
 
     /**
-     * Creates a transparent heatmap bitmap that can be overlaid on the live camera preview.
-     * Alpha is proportional to the intensity of the sound at that pixel.
+     * Creates a transparent heatmap bitmap overlaid on the live camera preview.
+     *
+     * The backend now sends a 56x56 uint8 heatmap (was 24x24). Both sizes are
+     * derived from the same mean-reduced mask, so the default parameters match
+     * the current server output. The call sites do not need to change because
+     * width/height are read from the proto payload via heatmapBytes.size.
+     *
+     * Alpha rendering uses a power-2.5 gamma curve so only genuinely high
+     * activations become visible. Low-activation pixels (background, silence)
+     * fade to transparent rather than accumulating as a red haze. This gives
+     * the same localization as the /predict endpoint overlay while keeping the
+     * background clear instead of blue.
      */
     fun createTransparentHeatmap(
         heatmapBytes: ByteArray,
-        width: Int = 24,
-        height: Int = 24
+        width: Int = 56,
+        height: Int = 56
     ): Bitmap? {
         try {
-            val heatmap = FloatArray(width * height)
-            for (i in 0 until (width * height)) {
+            // Infer actual grid size from the byte count so the function works
+            // with any resolution the server sends (56x56 = 3136 bytes currently).
+            val totalPixels = heatmapBytes.size.coerceAtLeast(1)
+            val inferredSide = Math.sqrt(totalPixels.toDouble()).toInt().coerceAtLeast(1)
+            val w = if (inferredSide * inferredSide == totalPixels) inferredSide else width
+            val h = if (inferredSide * inferredSide == totalPixels) inferredSide else height
+            val pixelCount = w * h
+
+            val heatmap = FloatArray(pixelCount)
+            for (i in 0 until pixelCount) {
                 if (i < heatmapBytes.size) {
-                    // For the Stream process, the backend encodes it as a byte array from uint8 (0-255)
+                    // Backend encodes as uint8 (0-255)
                     heatmap[i] = (heatmapBytes[i].toInt() and 0xFF) / 255.0f
                 }
             }
 
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val pixels = IntArray(width * height)
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val pixels = IntArray(pixelCount)
 
-            for (i in 0 until (width * height)) {
+            for (i in 0 until pixelCount) {
                 val v = heatmap[i].coerceIn(0f, 1f)
-                // The model outputs 0 for silence, 1 for sound.
-                // We want silence (v=0) to be completely transparent so the screen doesn't turn red/blue,
-                // and sound (v=1) to be nicely visible (alpha 180).
-                val alpha = (v * 180).toInt().coerceIn(0, 255)
+                // Gamma-2.5 curve: only high activations (genuine sound sources)
+                // become visible. Low values (background) are nearly transparent,
+                // avoiding the red haze that the old linear alpha produced.
+                // v=1.0 -> alpha=200, v=0.5 -> alpha=~18, v=0.3 -> alpha=~4
+                val alphaf = v.toDouble().pow(2.5) * 200.0
+                val alpha = alphaf.toInt().coerceIn(0, 200)
                 pixels[i] = (alpha shl 24) or (jetColormap(v) and 0x00FFFFFF)
             }
 
-            bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-            
-            // Explicitly scale up the 24x24 bitmap to a robust texture size (e.g. 240x240)
-            // This prevents Android's hardware accelerator from failing/blurring tiny textures
-            // when mapping them to large device screens using 'fitXY'
-            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 240, 240, true)
-            bitmap.recycle() // CRITICAL: Prevent Memory Leak
+            bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
+
+            // Scale to a robust texture size so Android's hardware accelerator
+            // maps it cleanly to the full preview surface.
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 336, 336, true)
+            bitmap.recycle()
             return scaledBitmap
         } catch (e: Exception) {
             e.printStackTrace()

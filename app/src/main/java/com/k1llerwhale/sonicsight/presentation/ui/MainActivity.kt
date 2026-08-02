@@ -2,6 +2,7 @@ package com.k1llerwhale.sonicsight.presentation.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -15,6 +16,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Bundle
 import android.os.CountDownTimer
 import android.os.SystemClock
@@ -51,7 +53,9 @@ import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.nio.ByteBuffer
+import com.k1llerwhale.sonicsight.util.AudioDecimator
 import com.k1llerwhale.sonicsight.util.JitterBuffer
+import com.k1llerwhale.sonicsight.util.RawAudioDumper
 import java.nio.ByteOrder
 
 class MainActivity : AppCompatActivity() {
@@ -66,8 +70,12 @@ class MainActivity : AppCompatActivity() {
 
     // Audio variables
     private var audioRecord: AudioRecord? = null
+    private var micDumper: RawAudioDumper? = null
     private var audioJob: Job? = null
-    private val SAMPLE_RATE = 11025
+    private var capDumper: RawAudioDumper? = null
+    private val SAMPLE_RATE = 11025          // stream + playback rate the server expects
+    private val CAPTURE_RATE = 44100         // the only rate Android guarantees on AudioRecord
+    private val DECIM_FACTOR = 4             // 44100 / 4 = 11025 exactly
     private val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
     private val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
 
@@ -437,36 +445,119 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("MissingPermission")
     private fun startAudioCapture() {
-        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-        // Read/send near frame cadence (~125ms @ 8fps) for smoother stream timing.
-        val samplesPerFrame = SAMPLE_RATE / 8
-        val bytesPerFrame = samplesPerFrame * 2 // PCM16 mono
-        val optimalBufferSize = maxOf(bufferSize, bytesPerFrame * 2)
+        // Output cadence: ~125 ms at 8 fps, at the 11025 Hz rate the server expects.
+        val samplesPerFrame = SAMPLE_RATE / 8                          // 1378
 
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE,
-            CHANNEL_CONFIG,
-            AUDIO_FORMAT,
-            optimalBufferSize
-        )
+        // Capture at a rate Android actually guarantees, then decimate in-app.
+        val captureSamplesPerFrame = samplesPerFrame * DECIM_FACTOR    // 5512 @ 44100
+        val captureBytesPerFrame = captureSamplesPerFrame * 2          // 11024
+        val minBuf = AudioRecord.getMinBufferSize(CAPTURE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+        val captureBufferSize = maxOf(minBuf, captureBytesPerFrame * 4)
 
-        audioRecord?.startRecording()
+        // Prefer sources that bypass OEM voice tuning (noise suppression, AGC,
+        // narrowband voice EQ). MIC is the last resort because it is the one
+        // most aggressively processed by the vendor HAL.
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val unprocessedSupported =
+            audioManager.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true"
+        Log.i("SonicSightDump", "UNPROCESSED supported by device: $unprocessedSupported")
+
+        val candidates = ArrayList<Pair<String, Int>>()
+        if (unprocessedSupported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            candidates.add(Pair("UNPROCESSED", MediaRecorder.AudioSource.UNPROCESSED))
+        }
+        candidates.add(Pair("CAMCORDER", MediaRecorder.AudioSource.CAMCORDER))
+        candidates.add(Pair("MIC", MediaRecorder.AudioSource.MIC))
+
+        var chosenName = "none"
+        var opened: AudioRecord? = null
+        for ((name, source) in candidates) {
+            val candidate = try {
+                AudioRecord(source, CAPTURE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT, captureBufferSize)
+            } catch (e: Exception) {
+                Log.w("SonicSightDump", "source $name threw: ${e.message}")
+                null
+            }
+            if (candidate != null && candidate.state == AudioRecord.STATE_INITIALIZED) {
+                opened = candidate
+                chosenName = name
+                break
+            }
+            try { candidate?.release() } catch (e: Exception) {}
+            Log.w("SonicSightDump", "source $name unavailable, trying next")
+        }
+
+        if (opened == null) {
+            Log.e("SonicSightDump", "no usable audio source at $CAPTURE_RATE Hz")
+            return
+        }
+
+        val record: AudioRecord = opened
+        audioRecord = record
+        record.startRecording()
+
+        Log.i("SonicSightDump", "AudioRecord source=$chosenName state=${record.state} " +
+                "requested=$CAPTURE_RATE actual=${record.sampleRate} " +
+                "ch=${record.channelCount} fmt=${record.audioFormat} " +
+                "minBuf=$minBuf used=$captureBufferSize " +
+                "then decimate /$DECIM_FACTOR to $SAMPLE_RATE Hz")
+
+        // DIAGNOSTIC: two dumps, so the filter can be judged on its own.
+        //   mic_cap44k = exactly what the hardware handed us, before our filter
+        //   mic_raw    = exactly what goes on the wire, after our filter
+        val dumpDir = try {
+            File(getExternalFilesDir(null), "sonicsight").apply { mkdirs() }
+        } catch (e: Exception) {
+            Log.e("SonicSightDump", "could not create dump dir: ${e.message}")
+            null
+        }
+        val stamp = System.currentTimeMillis()
+
+        capDumper = try {
+            if (dumpDir == null) null else
+                RawAudioDumper(File(dumpDir, "mic_cap44k_$stamp.wav"), CAPTURE_RATE).also {
+                    Log.i("SonicSightDump", "dumping raw capture to ${it.path}")
+                }
+        } catch (e: Exception) {
+            Log.e("SonicSightDump", "could not open capture dump: ${e.message}")
+            null
+        }
+
+        micDumper = try {
+            if (dumpDir == null) null else
+                RawAudioDumper(File(dumpDir, "mic_raw_$stamp.wav"), SAMPLE_RATE).also {
+                    Log.i("SonicSightDump", "dumping sent audio to ${it.path}")
+                }
+        } catch (e: Exception) {
+            Log.e("SonicSightDump", "could not open dump file: ${e.message}")
+            null
+        }
 
         audioJob = lifecycleScope.launch(Dispatchers.IO) {
-            val audioBuffer = ByteArray(bytesPerFrame)
+            val decimator = AudioDecimator(DECIM_FACTOR, 121, 5000.0, CAPTURE_RATE.toDouble())
+            decimator.reset()
+            val captureBuffer = ByteArray(captureBytesPerFrame)
+            val outBuffer = ByteArray(decimator.maxOutputBytes(captureBytesPerFrame))
             while (isActive && isRecording) {
                 try {
-                    val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
+                    val readResult = audioRecord?.read(captureBuffer, 0, captureBuffer.size) ?: 0
                     if (readResult > 0) {
                         val timestampMs = SystemClock.elapsedRealtime() - recordingStartTime
 
-                        val chunk = StreamChunk.newBuilder()
-                            .setTimestampMs(timestampMs)
-                            .setAudioPcm(ByteString.copyFrom(audioBuffer, 0, readResult))
-                            .build()
+                        capDumper?.write(captureBuffer, readResult)
 
-                        viewModel.sendStreamChunk(chunk)
+                        val outBytes = decimator.process(captureBuffer, readResult, outBuffer)
+                        if (outBytes > 0) {
+                            // identical bytes and count as the chunk below
+                            micDumper?.write(outBuffer, outBytes)
+
+                            val chunk = StreamChunk.newBuilder()
+                                .setTimestampMs(timestampMs)
+                                .setAudioPcm(ByteString.copyFrom(outBuffer, 0, outBytes))
+                                .build()
+
+                            viewModel.sendStreamChunk(chunk)
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e("SonicSight", "Audio capture error: ${e.message}")
@@ -489,6 +580,12 @@ class MainActivity : AppCompatActivity() {
         currentAudioJob?.cancel()
         try { currentAudioRecord?.stop() } catch (e: Exception) {}
         currentAudioRecord?.release()
+
+        // DIAGNOSTIC: finalize the raw mic WAV
+        micDumper?.close()
+        micDumper = null
+        capDumper?.close()
+        capDumper = null
 
         // Stop audio playback
         cleanupAudioPlayback()
