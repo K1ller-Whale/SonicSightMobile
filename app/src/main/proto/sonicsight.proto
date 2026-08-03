@@ -178,7 +178,12 @@ message StreamResult {
   // 1 = single full-frame map in left_heatmap only (multisensory CAM).
   int32 heatmap_count = 16;
 
-  // Field 17 is being held for the multisensory CAM confidence value
-  // (raw-CAM positive fraction; heatmap meaningless below 0.10). Added in
-  // the multisensory integration phase.
+  // Raw-CAM positive fraction in [0, 1] for confidence-gated models
+  // (multisensory). The alignment head the CAM comes from is never touched
+  // by the separation loss; below 0.10 the map means "this audio does not
+  // match this video" and the server sends left_heatmap empty. The client
+  // shows an honest "no confident localization" state instead of a garbage
+  // overlay; separated audio still plays. Always 0.0 for models without a
+  // confidence gate (sonicsight).
+  float cam_confidence = 17;
 }
