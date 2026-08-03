@@ -29,6 +29,10 @@ message Empty {}
 message HealthResponse {
   bool model_loaded = 1;
   string device = 2;
+
+  // Model ids whose checkpoints actually loaded (e.g. "sonicsight",
+  // "multisensory"). Empty on older servers that predate this field.
+  repeated string loaded_models = 3;
 }
 
 // Sent by mobile client as a stream
@@ -73,9 +77,9 @@ message InferenceResult {
   // Audio metadata
   int32 audio_sample_rate = 5;  // Always 11025
 
-  // Heatmap masks as raw float32 arrays
-  // Shape: [IMG_SIZE x IMG_SIZE] = [224 x 224] = 50176 float32 values
-  bytes left_heatmap = 6;   // 224*224*4 = 200704 bytes
+  // Heatmap masks as raw float32 arrays (little-endian)
+  // Shape: [224 x 224] = 50176 values = 200704 bytes per side
+  bytes left_heatmap = 6;
   bytes right_heatmap = 7;
 
   // Center frames for overlay (JPEG-encoded)
@@ -94,6 +98,7 @@ message StreamChunk {
 
   // Raw JPEG-encoded video frames (spatially cropped 224x224)
   // Optional: A chunk might contain only audio
+  // Used by the "sonicsight" (Sound of Pixels) model branch.
   bytes left_jpeg = 2;
   bytes right_jpeg = 7;
 
@@ -101,12 +106,21 @@ message StreamChunk {
   int32 frame_width = 3;
   int32 frame_height = 4;
 
-  // Raw PCM audio chunk (16-bit signed, mono)
-  // Required: Sample rate must be 11025 Hz
+  // Raw PCM audio chunk (16-bit signed, mono, 11025 Hz)
+  // Required on the "sonicsight" model branch.
   bytes audio_pcm = 5;
 
   // True for the final chunk in the stream
   bool is_last = 6;
+
+  // Full camera frame, letterboxed to 224x224 (1280x720 -> 224x126 content
+  // with 49 grey rows top and bottom), JPEG-encoded.
+  // Used by the "multisensory" model branch instead of left_jpeg/right_jpeg.
+  bytes full_jpeg = 8;
+
+  // Raw PCM audio chunk (16-bit signed, mono, 22050 Hz).
+  // Used by the "multisensory" model branch instead of audio_pcm.
+  bytes audio_pcm_hi = 9;
 }
 
 // Returned by server continuously as a stream
@@ -118,13 +132,19 @@ message StreamResult {
   // Timestamp of the center frame this result corresponds to
   int64 timestamp_ms = 3;
 
-  // Separated audio chunk corresponding to this timestep (raw PCM bytes, 16-bit signed, 11025Hz, mono)
+  // Separated audio chunk corresponding to this timestep (raw PCM bytes,
+  // 16-bit signed, mono). Sample rate depends on the model: 11025 Hz on the
+  // "sonicsight" branch, 21000 Hz on the "multisensory" branch. The client
+  // configures playback from its model profile.
   // This will be a small chunk (e.g., 0.1s to 0.5s of audio) to be played immediately
   bytes left_audio_pcm = 4;
   bytes right_audio_pcm = 5;
 
-  // Heatmap masks as uint8 arrays (streaming) or float32 (full processing)
-  // Streaming shape: [24 x 24] = 576 bytes (uint8)
+  // Heatmap masks as uint8 arrays (0-255), square grid.
+  // Currently 56 x 56 = 3136 bytes per side. The client infers the grid side
+  // from sqrt(byte count), so any square size decodes.
+  // When heatmap_count == 1 (multisensory), only left_heatmap is populated
+  // and right_heatmap is empty.
   bytes left_heatmap = 6;
   bytes right_heatmap = 7;
 
@@ -148,4 +168,17 @@ message StreamResult {
   // Number of PCM16 samples in each audio channel (left/right).
   // Allows the client to know exactly how much audio time this result covers.
   int32 audio_sample_count = 14;
+
+  // Echoes the model id this result was produced by ("sonicsight" |
+  // "multisensory"). The client drops results whose model_id does not match
+  // its current selection, discarding in-flight results after a model switch.
+  string model_id = 15;
+
+  // Number of heatmaps in this result: 2 = left/right (Sound of Pixels),
+  // 1 = single full-frame map in left_heatmap only (multisensory CAM).
+  int32 heatmap_count = 16;
+
+  // Field 17 is being held for the multisensory CAM confidence value
+  // (raw-CAM positive fraction; heatmap meaningless below 0.10). Added in
+  // the multisensory integration phase.
 }
