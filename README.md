@@ -15,11 +15,28 @@ By dynamically offloading heavy PyTorch AI processing to the server while retain
 
 ## ✨ Features
 
-- 🚀 **Lightning-Fast gRPC Streaming**: Utilizes bidirectional gRPC streaming to transmit raw JPEG frames and PCM audio chunks in near real-time, eliminating the need for heavy local FFmpeg encodings and ensuring blazing fast performance.
-- 🧩 **Asynchronous Architecture**: Employs Kotlin Coroutines to ensure the UI thread stays completely fluid and responsive during continuous streaming sessions with the AI server.
-- 🎨 **Dynamic Heatmap Visualization**: Automatically decodes, parses, and interpolates quantified heatmaps received from the server, cleanly overlaying them onto the user's video feed.
-- 🎵 **Multi-Track Audio Processing**: Synthesizes and routes the separated audio tracks back into synchronized user playback effortlessly.
-- 🔧 **Modern Android Practices**: Built cleanly and scalably atop MVVM (Model-View-ViewModel) architecture.
+- 🎚️ **User-selectable models**: a first-class switch between
+  **Music & instruments** (Sound of Pixels — separates by left/right screen
+  region, two heatmaps) and **Speech** (multisensory — separates
+  on-screen/off-screen by audio-video alignment, one heatmap). Each model is a
+  `ModelProfile` (frame rate, wire sample rate, frame format, labels); the
+  selection rides the `sonicsight-model` gRPC metadata key, and switching
+  always cancels the stream and reopens it. Results whose echoed `model_id`
+  doesn't match the current selection are dropped.
+- 🚀 **Bidirectional gRPC streaming**: raw JPEG frames + PCM chunks up, separated
+  audio + heatmaps back, continuously.
+- 🎨 **Spectral heatmap overlay**: server heatmaps (56×56 uint8 on the wire,
+  grid size inferred from byte count) rendered in the magma colormap —
+  perceptually uniform and colour-vision-deficiency-safe — with an on-screen
+  legend saying what the colours mean for the active model.
+- 🎵 **Separated playback with solo control**: chips labelled from the model
+  profile (Left/Right or On-screen/Off-screen) solo either stream; playback
+  sample rate follows the profile (11025 / 22050 Hz).
+- 🧭 **Honest states**: buffering with the model's real expected first-result
+  time, "no confident on-screen source" when the speech model's confidence
+  gate trips, and errors that say what to do next (unreachable server names
+  the host; unloaded model suggests the other one).
+- 🧩 **MVVM + Coroutines**, XML Views with ViewBinding.
 
 ## 🏗️ Project Architecture
 
@@ -65,7 +82,9 @@ SonicSightMobile/
    Open Android Studio and select **File -> Open**, navigating to the `SonicSightMobile` directory. 
 
 3. **Configure the IP Address:**
-   By default, the Mobile App communicates to a server. You will likely need to align the IP address of the gRPC server within the `GrpcModule.kt` dependency injection configurations to point to your physical backend machine (e.g., `192.168.1.XX:50051`).
+   Tap the ⚙ button in the app and enter your backend machine's IP or hostname
+   (port is fixed at 50051). The value persists in SharedPreferences;
+   `GrpcModule.kt` only holds the compiled-in default.
 
 4. **Sync Gradle:**
    Allow Gradle to synchronize, automatically pulling the Protobuf definitions to generate the Java Kotlin gRPC stubs.
@@ -75,8 +94,14 @@ SonicSightMobile/
 
 ## 🛠️ gRPC and Networking
 
-The app relies heavily on `.proto` contracts (`sonicsight.proto`) to serialize and transfer raw arrays without compressing into HTTP payloads. 
-- Ensure that if changes are made to the `sonicsight.proto` defined in the backend, they are strictly copied over to the Mobile's source `proto/` directory to prevent stub mismatches. 
+The app relies heavily on `.proto` contracts (`sonicsight.proto`) to serialize and transfer raw arrays without compressing into HTTP payloads.
+- The contract lives at the **backend repo root** (`SonicSightBackend/sonicsight.proto`);
+  this repo keeps a **byte-identical** copy at `app/src/main/proto/sonicsight.proto`.
+  If you change one, change the other in the same change set — Gradle regenerates
+  the Kotlin/Java stubs on build.
+- Model selection is per-stream gRPC metadata (`sonicsight-model`), echoed back in
+  every `StreamResult.model_id`. See `SonicSightBackend/MODELS.md` for how to add
+  a model end to end, and `SonicSightBackend/TESTPLAN.md` for the validation plan.
 
 ## 🛡️ License
 Distribute your license here. All rights reserved by the original project contributors.
