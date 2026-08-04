@@ -70,6 +70,34 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <!-- Model switch: label tells the user what to point the camera at,
+         never the architecture name. One-handed reach, above the record button. -->
+    <Button
+        android:id="@+id/btnModel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:text="Music &amp; Instruments"
+        android:backgroundTint="#455A64"
+        android:contentDescription="Switch separation model"
+        app:layout_constraintBottom_toTopOf="@id/btnRecord"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Server host settings -->
+    <Button
+        android:id="@+id/btnSettings"
+        style="?attr/borderlessButtonStyle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="8dp"
+        android:text="⚙"
+        android:textSize="20sp"
+        android:textColor="#FFFFFF"
+        android:contentDescription="Server settings"
+        app:layout_constraintTop_toBottomOf="@id/tvAudioSelection"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <!-- 4. Loading Indicator (Hidden by default) -->
     <ProgressBar
         android:id="@+id/progressBar"

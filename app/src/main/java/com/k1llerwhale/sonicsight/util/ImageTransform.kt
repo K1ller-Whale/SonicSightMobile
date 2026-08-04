@@ -2,11 +2,14 @@ package com.k1llerwhale.sonicsight.util
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
 import androidx.camera.core.ImageProxy
 import java.io.ByteArrayOutputStream
+import kotlin.math.roundToInt
 
 object ImageTransform {
 
@@ -110,5 +113,31 @@ object ImageTransform {
         rightCropped.recycle()
 
         return Pair(leftOut.toByteArray(), rightOut.toByteArray())
+    }
+
+    /**
+     * Letterboxes the full frame into a dim x dim JPEG for the multisensory
+     * branch: the frame is fit inside the square preserving aspect ratio and
+     * padded with mid-grey (1280x720 -> 224x126 content with 49 grey rows
+     * top and bottom; portrait frames get grey columns instead).
+     */
+    fun letterboxAndCompress(bitmap: Bitmap, dim: Int = 224, quality: Int = 90): ByteArray {
+        val scale = dim.toFloat() / maxOf(bitmap.width, bitmap.height)
+        val w = (bitmap.width * scale).roundToInt().coerceIn(1, dim)
+        val h = (bitmap.height * scale).roundToInt().coerceIn(1, dim)
+        val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
+
+        val boxed = Bitmap.createBitmap(dim, dim, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(boxed)
+        canvas.drawColor(Color.rgb(128, 128, 128))
+        canvas.drawBitmap(scaled, (dim - w) / 2f, (dim - h) / 2f, null)
+        if (scaled != bitmap) {
+            scaled.recycle()
+        }
+
+        val out = ByteArrayOutputStream()
+        boxed.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        boxed.recycle()
+        return out.toByteArray()
     }
 }

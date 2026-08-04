@@ -7,12 +7,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
+import com.k1llerwhale.sonicsight.data.model.ModelProfile
 import com.k1llerwhale.sonicsight.data.repository.GrpcVideoRepository
 import com.k1llerwhale.sonicsight.grpc.StreamChunk
 import com.k1llerwhale.sonicsight.grpc.StreamResult
 import com.k1llerwhale.sonicsight.util.MaskProcessor
 import com.k1llerwhale.sonicsight.util.MediaUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -48,8 +50,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: LiveData<UiState> = _uiState
 
     // Bidirectional Streaming Channels
-    // Using explicit parameters for MutableSharedFlow to avoid ambiguity
-    val outStreamChunks = MutableSharedFlow<StreamChunk>(replay = 0, extraBufferCapacity = 64)
+    // Recreated per stream in startStreaming(), so chunks buffered for a
+    // cancelled stream never leak into the next one (the capture profiles
+    // are incompatible between models).
+    private var outStreamChunks = MutableSharedFlow<StreamChunk>(replay = 0, extraBufferCapacity = 64)
+    private var streamJob: Job? = null
+
+    // Selected model. The id is volatile because handleStreamResult compares
+    // it against every echoed model_id on a background collector.
+    private val _currentProfile = MutableLiveData(ModelProfile.DEFAULT)
+    val currentProfile: LiveData<ModelProfile> = _currentProfile
+
+    @Volatile
+    private var selectedModelId: String = ModelProfile.DEFAULT.id
+
+    // True while a confidence-gated model reports no confident localization
+    // (empty heatmap + low cam_confidence). Audio keeps playing.
+    private val _noLocalization = MutableLiveData(false)
+    val noLocalization: LiveData<Boolean> = _noLocalization
 
     // Live results for UI overlay
     private val _streamResults = MutableLiveData<Bitmap>()
@@ -75,13 +93,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Start the bidirectional stream. Call this right before starting capture.
+     * Select a model. Only call while not streaming — the switch protocol is
+     * cancel the stream, then reopen with the new metadata (the activity
+     * orchestrates stop/start around this).
+     */
+    fun selectModel(profile: ModelProfile) {
+        selectedModelId = profile.id
+        _currentProfile.value = profile
+    }
+
+    /**
+     * Start the bidirectional stream for the selected model. Call this right
+     * before starting capture.
      */
     fun startStreaming() {
+        stopStreaming()
         _uiState.value = UiState.Streaming
+        _noLocalization.value = false
+        lastSeqNumber = -1
+        lastResultTimeMs = 0L
 
-        viewModelScope.launch {
-            repository.streamProcess(outStreamChunks)
+        // Fresh out-flow per stream: never replay old-profile chunks.
+        outStreamChunks = MutableSharedFlow(replay = 0, extraBufferCapacity = 64)
+        val chunks = outStreamChunks
+        val modelId = selectedModelId
+
+        streamJob = viewModelScope.launch {
+            repository.streamProcess(chunks, modelId)
                 .catch { e ->
                     _uiState.postValue(UiState.Error("Stream error: ${e.message}"))
                 }
@@ -89,6 +127,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     handleStreamResult(response)
                 }
         }
+    }
+
+    /** Cancel the active stream, if any. In-flight results from it are also
+     *  dropped by the model_id filter in handleStreamResult. */
+    fun stopStreaming() {
+        streamJob?.cancel()
+        streamJob = null
     }
 
     /**
@@ -100,6 +145,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun handleStreamResult(response: StreamResult) {
         val receiveTime = System.currentTimeMillis()
+
+        // Drop results whose echoed model id does not match the current
+        // selection — this is what discards in-flight results from a
+        // cancelled stream after a model switch. Empty model_id means a
+        // pre-registry server: accept for backward compatibility.
+        val echoedModel = response.modelId
+        if (echoedModel.isNotEmpty() && echoedModel != selectedModelId) {
+            Log.d("SonicSight", "Dropping stale result from model '$echoedModel'")
+            return
+        }
+
         if (!response.success) {
             withContext(Dispatchers.Main) {
                 _uiState.value = UiState.Error(response.errorMessage)
@@ -148,9 +204,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         withContext(Dispatchers.IO) {
             val renderStart = System.currentTimeMillis()
 
-            // We use the heatmap data to create a transparent overlay
-            // that will be placed directly on top of the camera preview.
-            // Since the backend outputs separate stereoscopic masks, we render and stitch them natively.
+            val profile = _currentProfile.value ?: ModelProfile.DEFAULT
+            val heatmapCount =
+                if (response.heatmapCount > 0) response.heatmapCount else profile.heatmapCount
+
+            if (heatmapCount == 1) {
+                // Single full-frame map rides in left_heatmap. An EMPTY map on
+                // a confidence-gated model is the server's honest "no
+                // confident localization" — clear the overlay, keep the audio.
+                if (response.leftHeatmap.isEmpty) {
+                    withContext(Dispatchers.Main) { _noLocalization.value = true }
+                    return@withContext
+                }
+                val overlay = maskProcessor.createTransparentHeatmap(response.leftHeatmap.toByteArray())
+                if (overlay != null) {
+                    val renderTime = System.currentTimeMillis() - renderStart
+                    withContext(Dispatchers.Main) {
+                        _noLocalization.value = false
+                        _streamResults.value = overlay
+                        Log.d("SonicSightPerf", "Total Result Latency: ${System.currentTimeMillis() - receiveTime}ms (Render: ${renderTime}ms)")
+                    }
+                }
+                return@withContext
+            }
+
+            // heatmapCount == 2: separate left/right masks, stitched natively.
             val leftTransparent = maskProcessor.createTransparentHeatmap(response.leftHeatmap.toByteArray())
             val rightTransparent = maskProcessor.createTransparentHeatmap(response.rightHeatmap.toByteArray())
 
@@ -162,6 +240,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 rightTransparent.recycle()
                 val renderTime = System.currentTimeMillis() - renderStart
                 withContext(Dispatchers.Main) {
+                    _noLocalization.value = false
                     _streamResults.value = stitched
                     Log.d("SonicSightPerf", "Total Result Latency: ${System.currentTimeMillis() - receiveTime}ms (Render: ${renderTime}ms)")
                 }
@@ -243,7 +322,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetState() {
+        stopStreaming()
         _uiState.value = UiState.Idle
+        _noLocalization.value = false
         lastSeqNumber = -1
         lastResultTimeMs = 0L
     }
