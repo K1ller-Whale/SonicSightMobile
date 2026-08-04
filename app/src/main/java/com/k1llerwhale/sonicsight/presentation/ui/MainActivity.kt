@@ -25,8 +25,10 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
+import android.widget.EditText
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.camera.core.CameraSelector
@@ -37,6 +39,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import com.google.protobuf.ByteString
 import com.k1llerwhale.sonicsight.data.api.GrpcModule
+import com.k1llerwhale.sonicsight.data.model.FrameKind
+import com.k1llerwhale.sonicsight.data.model.ModelProfile
 import com.k1llerwhale.sonicsight.databinding.ActivityMainBinding
 import com.k1llerwhale.sonicsight.grpc.StreamChunk
 import com.k1llerwhale.sonicsight.presentation.viewmodel.MainViewModel
@@ -73,11 +77,22 @@ class MainActivity : AppCompatActivity() {
     private var micDumper: RawAudioDumper? = null
     private var audioJob: Job? = null
     private var capDumper: RawAudioDumper? = null
-    private val SAMPLE_RATE = 11025          // stream + playback rate the server expects
-    private val CAPTURE_RATE = 44100         // the only rate Android guarantees on AudioRecord
-    private val DECIM_FACTOR = 4             // 44100 / 4 = 11025 exactly
+    private val CAPTURE_RATE = ModelProfile.CAPTURE_RATE  // the only rate Android guarantees
     private val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
     private val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+
+    // Active model profile. Stream/playback rate, decimation factor, frame
+    // rate and frame kind all come from here; switching models cancels the
+    // stream and reopens it — never mid-stream.
+    private var profile: ModelProfile = ModelProfile.DEFAULT
+
+    // JPEG-encode instrumentation (the multisensory profile needs ~30
+    // encodes/s, up from 16 — measured, not assumed; summary logged every 5 s)
+    private var perfWindowStartMs = 0L
+    private var perfFramesArrived = 0
+    private var perfFramesSent = 0
+    private var perfEncodeMsTotal = 0L
+    private var perfEncodeMsMax = 0L
 
     // Audio Playback
     private var audioTrackLeft: AudioTrack? = null
@@ -94,6 +109,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        GrpcModule.init(this)
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         // 1. Observe ViewModel State
@@ -107,7 +123,7 @@ class MainActivity : AppCompatActivity() {
             requestPermissions()
         }
 
-        // 3. Setup Button
+        // 3. Setup Buttons
         binding.btnRecord.setOnClickListener {
             if (!isRecording) {
                 startLiveStreaming()
@@ -115,6 +131,47 @@ class MainActivity : AppCompatActivity() {
                 stopLiveStreaming()
             }
         }
+        binding.btnModel.text = profile.displayName
+        binding.btnModel.setOnClickListener { switchModel() }
+        binding.btnSettings.setOnClickListener { showHostDialog() }
+    }
+
+    /**
+     * Switch to the next model. Protocol: cancel the stream, select, reopen
+     * with the new metadata — never switch mid-stream. In-flight results
+     * from the old stream are dropped by the ViewModel's model_id filter.
+     */
+    private fun switchModel() {
+        val next = ModelProfile.next(profile)
+        if (isRecording) {
+            stopLiveStreaming()
+            viewModel.selectModel(next)
+            // Give the mic HAL and the old stream time to release before
+            // reopening with the incompatible new capture profile.
+            binding.btnRecord.postDelayed({ startLiveStreaming() }, 700)
+        } else {
+            viewModel.selectModel(next)
+        }
+    }
+
+    private fun showHostDialog() {
+        if (isRecording) {
+            Toast.makeText(this, "Stop streaming before changing the server", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val input = EditText(this).apply {
+            setText(GrpcModule.currentHost())
+            hint = "Server IP or hostname"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("SonicSight server")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                GrpcModule.setHost(this, input.text.toString())
+                Toast.makeText(this, "Server: ${GrpcModule.currentHost()}", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun cleanupAudioPlayback() {
@@ -142,8 +199,11 @@ class MainActivity : AppCompatActivity() {
         // Clean up any previous playback resources first
         cleanupAudioPlayback()
 
+        // Playback rate comes from the model profile: 11025 Hz on the
+        // sonicsight branch, 22050 Hz on the multisensory branch.
+        val playbackRate = profile.streamRate
         val minBufferSize = AudioTrack.getMinBufferSize(
-            SAMPLE_RATE,
+            playbackRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
@@ -157,7 +217,7 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         val audioFormat = AudioFormat.Builder()
-            .setSampleRate(SAMPLE_RATE)
+            .setSampleRate(playbackRate)
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
@@ -189,13 +249,13 @@ class MainActivity : AppCompatActivity() {
         // Initial buffer of 200ms adapts upward if underruns are detected.
         leftJitterBuffer = JitterBuffer(
             audioTrack = audioTrackLeft!!,
-            sampleRate = SAMPLE_RATE,
+            sampleRate = playbackRate,
             initialBufferMs = 200,
             maxBufferMs = 1500
         )
         rightJitterBuffer = JitterBuffer(
             audioTrack = audioTrackRight!!,
-            sampleRate = SAMPLE_RATE,
+            sampleRate = playbackRate,
             initialBufferMs = 200,
             maxBufferMs = 1500
         )
@@ -283,7 +343,9 @@ class MainActivity : AppCompatActivity() {
                     binding.progressBar.visibility = View.GONE
                     binding.btnRecord.isEnabled = true
                     binding.btnRecord.text = "Stop Processing"
-                    binding.tvStatus.text = "Live Heatmap Active - Tap left/right overlay to solo source"
+                    val (first, second) = profile.streamLabels
+                    binding.tvStatus.text =
+                        "Listening (${profile.displayName})… first result in ~${profile.expectedFirstResultMs / 1000.0}s — tap overlay to solo $first/$second"
                     binding.ivHeatmapOverlay.visibility = View.VISIBLE
                     binding.tvAudioSelection.visibility = View.VISIBLE
                 }
@@ -306,18 +368,34 @@ class MainActivity : AppCompatActivity() {
 
         viewModel.playbackMode.observe(this) { mode ->
             applyPlaybackMode(mode)
-            binding.tvAudioSelection.text = when (mode) {
+            // Stream labels come from the model profile: Left/Right for
+            // Sound of Pixels, On-screen/Off-screen for multisensory.
+            val (first, second) = profile.streamLabels
+            val modeText = when (mode) {
                 PlaybackMode.BOTH -> "Audio: BOTH"
-                PlaybackMode.LEFT_ONLY -> "Audio: LEFT"
-                PlaybackMode.RIGHT_ONLY -> "Audio: RIGHT"
+                PlaybackMode.LEFT_ONLY -> "Audio: ${first.uppercase()}"
+                PlaybackMode.RIGHT_ONLY -> "Audio: ${second.uppercase()}"
             }
+            binding.tvAudioSelection.text = modeText
             if (isRecording) {
-                val toastText = when (mode) {
-                    PlaybackMode.BOTH -> "Audio mode: BOTH"
-                    PlaybackMode.LEFT_ONLY -> "Audio mode: LEFT"
-                    PlaybackMode.RIGHT_ONLY -> "Audio mode: RIGHT"
+                Toast.makeText(this, modeText, Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        viewModel.currentProfile.observe(this) { p ->
+            profile = p
+            binding.btnModel.text = p.displayName
+        }
+
+        viewModel.noLocalization.observe(this) { gated ->
+            if (gated) {
+                // Honest state: the model is not confident about WHERE the
+                // sound is. Clear the overlay instead of showing garbage;
+                // separated audio keeps playing.
+                binding.ivHeatmapOverlay.setImageDrawable(null)
+                if (isRecording) {
+                    binding.tvStatus.text = "Listening — no confident on-screen source"
                 }
-                Toast.makeText(this, toastText, Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -352,6 +430,13 @@ class MainActivity : AppCompatActivity() {
         isRecording = true
         recordingStartTime = SystemClock.elapsedRealtime()
 
+        // Reset encode instrumentation for this session
+        perfWindowStartMs = 0L
+        perfFramesArrived = 0
+        perfFramesSent = 0
+        perfEncodeMsTotal = 0
+        perfEncodeMsMax = 0
+
         // Setup audio playback receivers
         viewModel.setPlaybackMode(PlaybackMode.BOTH)
         setupAudioPlayback()
@@ -373,11 +458,14 @@ class MainActivity : AppCompatActivity() {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
 
-            // Throttle to 8 FPS manually
+            // Throttle to the profile's frame rate (125 ms = 8 fps for
+            // sonicsight, ~33 ms = 30 fps for multisensory)
             var lastAnalyzedTimestamp = 0L
+            val frameIntervalMs = profile.frameIntervalMs
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                perfFramesArrived++
                 val currentTimestamp = SystemClock.elapsedRealtime()
-                if (currentTimestamp - lastAnalyzedTimestamp >= 125) { // 1000ms / 8fps = 125ms
+                if (currentTimestamp - lastAnalyzedTimestamp >= frameIntervalMs) {
                     processImageProxy(imageProxy)
                     lastAnalyzedTimestamp = currentTimestamp
                 }
@@ -425,31 +513,69 @@ class MainActivity : AppCompatActivity() {
         
         val prepStart = System.currentTimeMillis()
 
-        // 3. Process, Split, Resize, Crop and Compress exactly like the Python backend did
-        val (leftJpegBytes, rightJpegBytes) = com.k1llerwhale.sonicsight.util.ImageTransform.processAndCompressHalves(bitmap)
+        // 3. Prepare frame(s) per the model profile and compress
+        val chunk: StreamChunk = if (profile.frameKind == FrameKind.FULL_LETTERBOXED) {
+            val fullJpeg = com.k1llerwhale.sonicsight.util.ImageTransform.letterboxAndCompress(bitmap)
+            StreamChunk.newBuilder()
+                .setTimestampMs(timestampMs)
+                .setFullJpeg(ByteString.copyFrom(fullJpeg))
+                .setFrameWidth(224)
+                .setFrameHeight(224)
+                .build()
+        } else {
+            // Split, Resize, Crop and Compress exactly like the Python backend did
+            val (leftJpegBytes, rightJpegBytes) =
+                com.k1llerwhale.sonicsight.util.ImageTransform.processAndCompressHalves(bitmap)
+            StreamChunk.newBuilder()
+                .setTimestampMs(timestampMs)
+                .setLeftJpeg(ByteString.copyFrom(leftJpegBytes))
+                .setRightJpeg(ByteString.copyFrom(rightJpegBytes))
+                .setFrameWidth(224)
+                .setFrameHeight(224)
+                .build()
+        }
         val prepTime = System.currentTimeMillis() - prepStart
         bitmap.recycle()
 
         // 4. Send to Backend without decoding overhead
-        val chunk = StreamChunk.newBuilder()
-            .setTimestampMs(timestampMs)
-            .setLeftJpeg(ByteString.copyFrom(leftJpegBytes))
-            .setRightJpeg(ByteString.copyFrom(rightJpegBytes))
-            .setFrameWidth(224)
-            .setFrameHeight(224)
-            .build()
-
         viewModel.sendStreamChunk(chunk)
-        Log.d("SonicSightPerf", "Prep & Compress: ${prepTime}ms, Total: ${SystemClock.elapsedRealtime() - startTime}ms")
+
+        // 5. Encode-load instrumentation: the multisensory profile roughly
+        // doubles the JPEG encode rate (16/s -> ~30/s). Measure it instead of
+        // assuming it is fine; summary every 5 s under SonicSightPerf.
+        perfFramesSent++
+        perfEncodeMsTotal += prepTime
+        if (prepTime > perfEncodeMsMax) perfEncodeMsMax = prepTime
+        val now = SystemClock.elapsedRealtime()
+        if (perfWindowStartMs == 0L) perfWindowStartMs = now
+        val windowMs = now - perfWindowStartMs
+        if (windowMs >= 5000) {
+            val sentPerSec = perfFramesSent * 1000.0 / windowMs
+            val arrivedPerSec = perfFramesArrived * 1000.0 / windowMs
+            val avgEncode = if (perfFramesSent > 0) perfEncodeMsTotal / perfFramesSent else 0
+            Log.i(
+                "SonicSightPerf",
+                "[${profile.id}] frames arrived=%.1f/s sent=%.1f/s (target %.1f/s) | encode avg=%dms max=%dms"
+                    .format(arrivedPerSec, sentPerSec, 1000.0 / profile.frameIntervalMs, avgEncode, perfEncodeMsMax)
+            )
+            perfWindowStartMs = now
+            perfFramesArrived = 0
+            perfFramesSent = 0
+            perfEncodeMsTotal = 0
+            perfEncodeMsMax = 0
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun startAudioCapture() {
-        // Output cadence: ~125 ms at 8 fps, at the 11025 Hz rate the server expects.
-        val samplesPerFrame = SAMPLE_RATE / 8                          // 1378
+        // Output cadence: ~125 ms blocks at the profile's wire rate
+        // (11025 Hz sonicsight, 22050 Hz multisensory).
+        val streamRate = profile.streamRate
+        val decimFactor = profile.decimFactor
+        val samplesPerBlock = streamRate / 8                           // 1378 | 2756
 
         // Capture at a rate Android actually guarantees, then decimate in-app.
-        val captureSamplesPerFrame = samplesPerFrame * DECIM_FACTOR    // 5512 @ 44100
+        val captureSamplesPerFrame = samplesPerBlock * decimFactor     // 5512 @ 44100 (both)
         val captureBytesPerFrame = captureSamplesPerFrame * 2          // 11024
         val minBuf = AudioRecord.getMinBufferSize(CAPTURE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
         val captureBufferSize = maxOf(minBuf, captureBytesPerFrame * 4)
@@ -500,7 +626,7 @@ class MainActivity : AppCompatActivity() {
                 "requested=$CAPTURE_RATE actual=${record.sampleRate} " +
                 "ch=${record.channelCount} fmt=${record.audioFormat} " +
                 "minBuf=$minBuf used=$captureBufferSize " +
-                "then decimate /$DECIM_FACTOR to $SAMPLE_RATE Hz")
+                "then decimate /$decimFactor to $streamRate Hz")
 
         // DIAGNOSTIC: two dumps, so the filter can be judged on its own.
         //   mic_cap44k = exactly what the hardware handed us, before our filter
@@ -525,7 +651,7 @@ class MainActivity : AppCompatActivity() {
 
         micDumper = try {
             if (dumpDir == null) null else
-                RawAudioDumper(File(dumpDir, "mic_raw_$stamp.wav"), SAMPLE_RATE).also {
+                RawAudioDumper(File(dumpDir, "mic_raw_$stamp.wav"), streamRate).also {
                     Log.i("SonicSightDump", "dumping sent audio to ${it.path}")
                 }
         } catch (e: Exception) {
@@ -533,8 +659,11 @@ class MainActivity : AppCompatActivity() {
             null
         }
 
+        val isHiRate = profile.frameKind == FrameKind.FULL_LETTERBOXED
         audioJob = lifecycleScope.launch(Dispatchers.IO) {
-            val decimator = AudioDecimator(DECIM_FACTOR, 121, 5000.0, CAPTURE_RATE.toDouble())
+            val decimator = AudioDecimator(
+                decimFactor, 121, profile.decimCutoffHz, CAPTURE_RATE.toDouble()
+            )
             decimator.reset()
             val captureBuffer = ByteArray(captureBytesPerFrame)
             val outBuffer = ByteArray(decimator.maxOutputBytes(captureBytesPerFrame))
@@ -551,12 +680,13 @@ class MainActivity : AppCompatActivity() {
                             // identical bytes and count as the chunk below
                             micDumper?.write(outBuffer, outBytes)
 
-                            val chunk = StreamChunk.newBuilder()
-                                .setTimestampMs(timestampMs)
-                                .setAudioPcm(ByteString.copyFrom(outBuffer, 0, outBytes))
-                                .build()
+                            // audio_pcm (11025 Hz) feeds the sonicsight branch,
+                            // audio_pcm_hi (22050 Hz) the multisensory branch.
+                            val pcm = ByteString.copyFrom(outBuffer, 0, outBytes)
+                            val builder = StreamChunk.newBuilder().setTimestampMs(timestampMs)
+                            if (isHiRate) builder.setAudioPcmHi(pcm) else builder.setAudioPcm(pcm)
 
-                            viewModel.sendStreamChunk(chunk)
+                            viewModel.sendStreamChunk(builder.build())
                         }
                     }
                 } catch (e: Exception) {
