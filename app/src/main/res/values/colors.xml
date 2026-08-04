@@ -1,5 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- SonicSight tokens. The identity is the magma spectrogram ramp the
+         heatmap is drawn in; chrome stays quiet underneath it. -->
+    <color name="void_">#0A0511</color>      <!-- scrim base: magma's black, not pure black -->
+    <color name="iris">#51127C</color>       <!-- ramp low -->
+    <color name="fuchsia">#B63679</color>    <!-- ramp mid -->
+    <color name="ember">#FB8861</color>      <!-- ramp high; the one interactive accent -->
+    <color name="glow">#FCFDBF</color>       <!-- ramp peak; emphasis text -->
+    <color name="chalk">#F4F2EF</color>      <!-- body text over scrim -->
+
+    <color name="scrim_strong">#CC0A0511</color>
+    <color name="scrim_soft">#660A0511</color>
+    <color name="chalk_dim">#99F4F2EF</color>
+
+    <!-- legacy names kept for generated references -->
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 </resources>

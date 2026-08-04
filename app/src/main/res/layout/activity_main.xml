@@ -1,111 +1,249 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The viewfinder is the hero: full-bleed camera with the heatmap veil over it.
+  All chrome floats on scrims — a guest on the image, not a frame around it.
+  Controls cluster in the bottom third for one-handed reach:
+  solo chips -> model switch -> record.
+-->
 <androidx.constraintlayout.widget.ConstraintLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/void_"
     tools:context=".presentation.ui.MainActivity">
 
-    <!-- 1. Camera Preview -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:contentDescription="@string/cd_viewfinder"
         app:scaleType="fillCenter" />
 
-    <!-- OVERLAY: Live Heatmap from server -->
-    <!-- We make it a square and center it, as the AI model uses a center crop -->
+    <!-- The spectral veil: server heatmap in the magma ramp. Decorative for
+         accessibility; the ticker + legend carry its meaning in text. -->
     <ImageView
         android:id="@+id/ivHeatmapOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:scaleType="fitXY"
         android:visibility="gone"
-        android:alpha="0.7"
+        android:alpha="0.75"
+        android:importantForAccessibility="no"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- 2. Status Log (To see file sizes) -->
+    <View
+        android:id="@+id/scrimTop"
+        android:layout_width="match_parent"
+        android:layout_height="96dp"
+        android:background="@drawable/scrim_top"
+        android:importantForAccessibility="no"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <View
+        android:id="@+id/scrimBottom"
+        android:layout_width="match_parent"
+        android:layout_height="220dp"
+        android:background="@drawable/scrim_bottom"
+        android:importantForAccessibility="no"
+        app:layout_constraintBottom_toBottomOf="parent" />
+
+    <!-- The instrument ticker: one monospace line of truth about state. -->
     <TextView
         android:id="@+id/tvStatus"
+        style="@style/TextAppearance.SonicSight.Ticker"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_margin="16dp"
-        android:background="#80000000"
-        android:padding="8dp"
-        android:text="Ready to record..."
-        android:textColor="#FFFFFF"
-        android:fontFamily="monospace"
+        android:layout_marginTop="40dp"
+        android:layout_marginHorizontal="16dp"
+        android:accessibilityLiveRegion="polite"
+        android:text="@string/state_ready"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"/>
+        app:layout_constraintEnd_toEndOf="parent" />
 
-    <TextView
-        android:id="@+id/tvAudioSelection"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:background="#99000000"
-        android:paddingHorizontal="10dp"
-        android:paddingVertical="6dp"
-        android:text="Audio: BOTH"
-        android:textColor="#FFFFFF"
-        android:textStyle="bold"
+    <!-- Buffering hairline: fills over the model's expected first-result
+         time, so the wait is honest instead of indeterminate. -->
+    <ProgressBar
+        android:id="@+id/progressBar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="0dp"
+        android:layout_height="2dp"
+        android:layout_marginTop="6dp"
+        android:layout_marginHorizontal="16dp"
+        android:max="1000"
+        android:progressTint="@color/ember"
+        android:progressBackgroundTint="@color/chalk_dim"
+        android:visibility="gone"
         app:layout_constraintTop_toBottomOf="@id/tvStatus"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- 3. Record Button -->
+    <Button
+        android:id="@+id/btnSettings"
+        style="?attr/borderlessButtonStyle"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginTop="32dp"
+        android:layout_marginEnd="8dp"
+        android:text="⚙"
+        android:textSize="20sp"
+        android:textColor="@color/chalk"
+        android:contentDescription="@string/cd_settings"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Legend: the ramp plus what its ends MEAN for the active model
+         (sound energy vs audio-video match). High is at the top. -->
+    <TextView
+        android:id="@+id/tvLegendHigh"
+        style="@style/TextAppearance.SonicSight.Ticker"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="10sp"
+        android:textColor="@color/glow"
+        android:text="Loud"
+        app:layout_constraintBottom_toTopOf="@id/legendRamp"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="4dp" />
+
+    <com.k1llerwhale.sonicsight.presentation.ui.LegendRampView
+        android:id="@+id/legendRamp"
+        android:layout_width="6dp"
+        android:layout_height="120dp"
+        android:layout_marginEnd="16dp"
+        android:contentDescription="@string/cd_legend"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintVertical_bias="0.42" />
+
+    <TextView
+        android:id="@+id/tvLegendLow"
+        style="@style/TextAppearance.SonicSight.Ticker"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="10sp"
+        android:textColor="@color/chalk_dim"
+        android:text="Quiet"
+        app:layout_constraintTop_toBottomOf="@id/legendRamp"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginEnd="12dp"
+        android:layout_marginTop="4dp" />
+
+    <!-- Honest low-confidence state: shown when a gated model reports the
+         heatmap would be meaningless. Audio keeps playing. -->
+    <TextView
+        android:id="@+id/tvGate"
+        style="@style/TextAppearance.SonicSight.Ticker"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/gate_pill_bg"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:text="@string/state_no_confident_source"
+        android:visibility="gone"
+        android:accessibilityLiveRegion="polite"
+        app:layout_constraintBottom_toTopOf="@id/soloGroup"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Which separated audio to hear. Labels come from the model profile:
+         Left/Right for music, On-screen/Off-screen for speech — the halves
+         of the frame stop meaning anything on the speech model, so this is
+         a control, not a tap zone on the image. -->
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/soloGroup"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:contentDescription="@string/cd_solo_group"
+        app:singleSelection="true"
+        app:selectionRequired="true"
+        app:layout_constraintBottom_toTopOf="@id/modelGroup"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/btnSoloBoth"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAllCaps="false"
+            android:fontFamily="sans-serif-condensed-medium"
+            android:text="@string/both_sources" />
+
+        <Button
+            android:id="@+id/btnSoloFirst"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAllCaps="false"
+            android:fontFamily="sans-serif-condensed-medium"
+            android:text="Left" />
+
+        <Button
+            android:id="@+id/btnSoloSecond"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAllCaps="false"
+            android:fontFamily="sans-serif-condensed-medium"
+            android:text="Right" />
+    </com.google.android.material.button.MaterialButtonToggleGroup>
+
+    <!-- The model switch: pick by what you point the camera at. -->
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/modelGroup"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:contentDescription="@string/cd_model_switch"
+        app:singleSelection="true"
+        app:selectionRequired="true"
+        app:layout_constraintBottom_toTopOf="@id/btnRecord"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginBottom="12dp">
+
+        <Button
+            android:id="@+id/btnModelMusic"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAllCaps="false"
+            android:fontFamily="sans-serif-condensed-medium"
+            android:text="@string/model_music" />
+
+        <Button
+            android:id="@+id/btnModelSpeech"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAllCaps="false"
+            android:fontFamily="sans-serif-condensed-medium"
+            android:text="@string/model_speech" />
+    </com.google.android.material.button.MaterialButtonToggleGroup>
+
     <Button
         android:id="@+id/btnRecord"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="32dp"
-        android:text="Start Live Processing"
-        android:backgroundTint="#E91E63"
+        android:layout_marginBottom="28dp"
+        android:paddingHorizontal="32dp"
+        android:textAllCaps="false"
+        android:fontFamily="sans-serif-condensed-medium"
+        android:text="@string/start_listening"
+        android:backgroundTint="@color/ember"
+        android:textColor="@color/void_"
+        android:contentDescription="@string/cd_record_button"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
-
-    <!-- Model switch: label tells the user what to point the camera at,
-         never the architecture name. One-handed reach, above the record button. -->
-    <Button
-        android:id="@+id/btnModel"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="8dp"
-        android:text="Music &amp; Instruments"
-        android:backgroundTint="#455A64"
-        android:contentDescription="Switch separation model"
-        app:layout_constraintBottom_toTopOf="@id/btnRecord"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
-
-    <!-- Server host settings -->
-    <Button
-        android:id="@+id/btnSettings"
-        style="?attr/borderlessButtonStyle"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_margin="8dp"
-        android:text="⚙"
-        android:textSize="20sp"
-        android:textColor="#FFFFFF"
-        android:contentDescription="Server settings"
-        app:layout_constraintTop_toBottomOf="@id/tvAudioSelection"
-        app:layout_constraintEnd_toEndOf="parent" />
-
-    <!-- 4. Loading Indicator (Hidden by default) -->
-    <ProgressBar
-        android:id="@+id/progressBar"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:visibility="gone"
-        app:layout_constraintBottom_toTopOf="@id/btnRecord"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"/>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
