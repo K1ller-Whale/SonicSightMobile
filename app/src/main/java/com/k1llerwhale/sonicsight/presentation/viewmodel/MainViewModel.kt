@@ -53,7 +53,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Recreated per stream in startStreaming(), so chunks buffered for a
     // cancelled stream never leak into the next one (the capture profiles
     // are incompatible between models).
-    private var outStreamChunks = MutableSharedFlow<StreamChunk>(replay = 0, extraBufferCapacity = 64)
+    private var outStreamChunks = MutableSharedFlow<StreamChunk>(replay = 0, extraBufferCapacity = 128)
     private var streamJob: Job? = null
 
     // Selected model. The id is volatile because handleStreamResult compares
@@ -137,10 +137,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Send a chunk to the server.
+     * Send a FRAME chunk to the server. tryEmit is deliberate: when the
+     * out-queue is saturated a dropped frame is harmless (the next one is
+     * 33-125 ms away) and blocking the camera analyzer would be worse.
      */
     fun sendStreamChunk(chunk: StreamChunk) {
         outStreamChunks.tryEmit(chunk)
+    }
+
+    /**
+     * Send an AUDIO chunk to the server, losslessly. Audio must never be
+     * dropped: the server's window timeline is built from received samples,
+     * and every lost chunk makes buffered audio fall behind the video
+     * timestamps until no valid inference window exists — audible as
+     * stuttering and "skipping non-monotonic window" storms server-side.
+     * At 30 fps the frame flood can saturate the queue, so audio uses a
+     * suspending emit and waits for space instead of vanishing.
+     */
+    suspend fun sendAudioChunk(chunk: StreamChunk) {
+        outStreamChunks.emit(chunk)
     }
 
     private suspend fun handleStreamResult(response: StreamResult) {

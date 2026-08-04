@@ -745,7 +745,9 @@ class MainActivity : AppCompatActivity() {
                             val builder = StreamChunk.newBuilder().setTimestampMs(timestampMs)
                             if (isHiRate) builder.setAudioPcmHi(pcm) else builder.setAudioPcm(pcm)
 
-                            viewModel.sendStreamChunk(builder.build())
+                            // Lossless, suspending: audio chunks must never be
+                            // dropped by a saturated out-queue (frames may).
+                            viewModel.sendAudioChunk(builder.build())
                         }
                     }
                 } catch (e: Exception) {
