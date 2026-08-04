@@ -1,3 +1,35 @@
 <resources>
     <string name="app_name">SonicSight</string>
+
+    <!-- Controls -->
+    <string name="start_listening">Start listening</string>
+    <string name="stop_listening">Stop listening</string>
+    <string name="both_sources">Both</string>
+    <string name="cd_record_button">Start or stop live sound separation</string>
+    <string name="cd_model_switch">Choose what to separate</string>
+    <string name="cd_solo_group">Choose which separated audio to hear</string>
+    <string name="cd_legend">Heatmap colour scale</string>
+    <string name="cd_settings">Server settings</string>
+    <string name="cd_viewfinder">Camera view with sound heatmap</string>
+
+    <!-- Model names: what you point the camera at, never architecture names -->
+    <string name="model_music">Music &amp; instruments</string>
+    <string name="model_speech">Speech</string>
+
+    <!-- States. Errors say what happened and what to do next. -->
+    <string name="state_ready">Point the camera at the sound, then start listening</string>
+    <string name="state_buffering">Listening — first result in about %1$s s</string>
+    <string name="state_live">Live — colours show where the sound is</string>
+    <string name="state_switching">Switching to %1$s…</string>
+    <string name="state_no_confident_source">No confident on-screen source — audio still separating</string>
+    <string name="error_server_unreachable">Can\'t reach the server at %1$s. Check Wi-Fi, or change the address in settings.</string>
+    <string name="error_model_unavailable">%1$s isn\'t loaded on this server. Try the other model.</string>
+    <string name="error_generic">Something broke: %1$s</string>
+
+    <!-- Settings dialog -->
+    <string name="settings_title">SonicSight server</string>
+    <string name="settings_hint">Server IP or hostname</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_cancel">Cancel</string>
+    <string name="settings_stop_first">Stop listening before changing the server</string>
 </resources>

@@ -34,6 +34,8 @@ data class ModelProfile(
     val heatmapCount: Int,
     /** What the two audio streams MEAN. Never hard-code "Left/Right". */
     val streamLabels: Pair<String, String>,
+    /** What the heatmap's high and low ends MEAN, for the legend. */
+    val heatmapMeaning: Pair<String, String>,
     /** True: server may send an empty heatmap with low cam_confidence. */
     val confidenceGated: Boolean,
     /** Rough perceived lag, for honest buffering copy. */
@@ -53,6 +55,7 @@ data class ModelProfile(
             frameKind = FrameKind.LEFT_RIGHT_HALVES,
             heatmapCount = 2,
             streamLabels = "Left" to "Right",
+            heatmapMeaning = "Loud" to "Quiet",   // per-pixel sound energy
             confidenceGated = false,
             expectedFirstResultMs = 3000L,   // ~half the 5.9 s window
         )
@@ -67,6 +70,7 @@ data class ModelProfile(
             frameKind = FrameKind.FULL_LETTERBOXED,
             heatmapCount = 1,
             streamLabels = "On-screen" to "Off-screen",
+            heatmapMeaning = "Matches audio" to "No match",  // alignment strength
             confidenceGated = true,
             expectedFirstResultMs = 1200L,   // ~half the 2.1 s window
         )

@@ -61,7 +61,7 @@ class MaskProcessor {
 
         for (i in 0 until (w * h)) {
             val v = values[i].coerceIn(0f, 1f)
-            pixels[i] = jetColormap(v)
+            pixels[i] = heatColor(v)
         }
 
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
@@ -130,7 +130,7 @@ class MaskProcessor {
                 // v=1.0 -> alpha=200, v=0.5 -> alpha=~18, v=0.3 -> alpha=~4
                 val alphaf = v.toDouble().pow(2.5) * 200.0
                 val alpha = alphaf.toInt().coerceIn(0, 200)
-                pixels[i] = (alpha shl 24) or (jetColormap(v) and 0x00FFFFFF)
+                pixels[i] = (alpha shl 24) or (heatColor(v) and 0x00FFFFFF)
             }
 
             bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
@@ -146,12 +146,9 @@ class MaskProcessor {
         }
     }
 
-    private fun jetColormap(v: Float): Int {
-        val r = (clamp(1.5f - Math.abs(v - 0.75f) * 4f) * 255).toInt()
-        val g = (clamp(1.5f - Math.abs(v - 0.5f) * 4f) * 255).toInt()
-        val b = (clamp(1.5f - Math.abs(v - 0.25f) * 4f) * 255).toInt()
-        return (255 shl 24) or (r shl 16) or (g shl 8) or b
-    }
-
-    private fun clamp(v: Float) = Math.min(1f, Math.max(0f, v))
+    // Heatmap colours come from the magma spectrogram palette: perceptually
+    // uniform, monotonic in lightness (so the scale survives red-green
+    // colour-vision deficiencies), dark at the quiet end so it vanishes
+    // over the camera image. Replaces the old jet map.
+    private fun heatColor(v: Float): Int = MagmaPalette.color(v)
 }

@@ -38,6 +38,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import com.google.protobuf.ByteString
+import com.k1llerwhale.sonicsight.R
 import com.k1llerwhale.sonicsight.data.api.GrpcModule
 import com.k1llerwhale.sonicsight.data.model.FrameKind
 import com.k1llerwhale.sonicsight.data.model.ModelProfile
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
     private var isRecording = false
     private var recordingStartTime = 0L
+    private var hasFirstResult = false
 
     // Audio variables
     private var audioRecord: AudioRecord? = null
@@ -114,7 +116,6 @@ class MainActivity : AppCompatActivity() {
 
         // 1. Observe ViewModel State
         observeUiState()
-        setupOverlayTapSelection()
 
         // 2. Check Permissions & Start Camera Preview
         if (allPermissionsGranted()) {
@@ -123,7 +124,7 @@ class MainActivity : AppCompatActivity() {
             requestPermissions()
         }
 
-        // 3. Setup Buttons
+        // 3. Setup Controls
         binding.btnRecord.setOnClickListener {
             if (!isRecording) {
                 startLiveStreaming()
@@ -131,46 +132,76 @@ class MainActivity : AppCompatActivity() {
                 stopLiveStreaming()
             }
         }
-        binding.btnModel.text = profile.displayName
-        binding.btnModel.setOnClickListener { switchModel() }
         binding.btnSettings.setOnClickListener { showHostDialog() }
+
+        binding.modelGroup.check(
+            if (profile.id == ModelProfile.MULTISENSORY.id) binding.btnModelSpeech.id
+            else binding.btnModelMusic.id
+        )
+        binding.modelGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (!isChecked) return@addOnButtonCheckedListener
+            val target = if (checkedId == binding.btnModelSpeech.id) {
+                ModelProfile.MULTISENSORY
+            } else {
+                ModelProfile.SONICSIGHT
+            }
+            if (target.id != profile.id) switchModel(target)
+        }
+
+        binding.soloGroup.check(binding.btnSoloBoth.id)
+        binding.soloGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (!isChecked) return@addOnButtonCheckedListener
+            val mode = when (checkedId) {
+                binding.btnSoloFirst.id -> PlaybackMode.LEFT_ONLY
+                binding.btnSoloSecond.id -> PlaybackMode.RIGHT_ONLY
+                else -> PlaybackMode.BOTH
+            }
+            viewModel.setPlaybackMode(mode)
+        }
     }
 
     /**
-     * Switch to the next model. Protocol: cancel the stream, select, reopen
-     * with the new metadata — never switch mid-stream. In-flight results
-     * from the old stream are dropped by the ViewModel's model_id filter.
+     * Switch model. Protocol: cancel the stream, select, reopen with the
+     * new metadata — never switch mid-stream. In-flight results from the
+     * old stream are dropped by the ViewModel's model_id filter.
      */
-    private fun switchModel() {
-        val next = ModelProfile.next(profile)
+    private fun switchModel(target: ModelProfile) {
         if (isRecording) {
+            binding.tvStatus.text = getString(R.string.state_switching, target.displayName)
             stopLiveStreaming()
-            viewModel.selectModel(next)
+            viewModel.selectModel(target)
             // Give the mic HAL and the old stream time to release before
             // reopening with the incompatible new capture profile.
             binding.btnRecord.postDelayed({ startLiveStreaming() }, 700)
         } else {
-            viewModel.selectModel(next)
+            viewModel.selectModel(target)
         }
     }
 
+    /** True when the system requests no/short animations. */
+    private fun reducedMotion(): Boolean =
+        android.provider.Settings.Global.getFloat(
+            contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+        ) == 0f
+
     private fun showHostDialog() {
         if (isRecording) {
-            Toast.makeText(this, "Stop streaming before changing the server", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.settings_stop_first), Toast.LENGTH_SHORT).show()
             return
         }
         val input = EditText(this).apply {
             setText(GrpcModule.currentHost())
-            hint = "Server IP or hostname"
+            hint = getString(R.string.settings_hint)
         }
         AlertDialog.Builder(this)
-            .setTitle("SonicSight server")
+            .setTitle(getString(R.string.settings_title))
             .setView(input)
-            .setPositiveButton("Save") { _, _ ->
+            .setPositiveButton(getString(R.string.settings_save)) { _, _ ->
                 GrpcModule.setHost(this, input.text.toString())
                 Toast.makeText(this, "Server: ${GrpcModule.currentHost()}", Toast.LENGTH_SHORT).show()
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(getString(R.string.settings_cancel), null)
             .show()
     }
 
@@ -299,35 +330,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupOverlayTapSelection() {
-        binding.ivHeatmapOverlay.setOnTouchListener { view, event ->
-            if (!isRecording) return@setOnTouchListener false
-
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> true
-                MotionEvent.ACTION_UP -> {
-                    if (view.width <= 0) return@setOnTouchListener false
-
-                    val tappedMode = if (event.x < (view.width / 2f)) {
-                        PlaybackMode.LEFT_ONLY
-                    } else {
-                        PlaybackMode.RIGHT_ONLY
-                    }
-
-                    val nextMode = if (currentPlaybackMode == tappedMode) {
-                        PlaybackMode.BOTH
-                    } else {
-                        tappedMode
-                    }
-                    // Give instant physical feedback for source selection.
-                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                    viewModel.setPlaybackMode(nextMode)
-                    true
-                }
-                else -> false
-            }
-        }
-    }
+    // NOTE: the old tap-on-overlay-halves solo gesture is gone deliberately.
+    // On the speech model the two streams mean on-screen/off-screen, which
+    // is not spatial — a left/right tap zone would lie. The solo chips are
+    // the one control for this on both models, labelled from the profile.
 
     private fun observeUiState() {
         viewModel.uiState.observe(this) { state ->
@@ -335,23 +341,27 @@ class MainActivity : AppCompatActivity() {
                 is UiState.Idle -> {
                     binding.progressBar.visibility = View.GONE
                     binding.btnRecord.isEnabled = true
-                    binding.btnRecord.text = "Start Live Processing"
+                    binding.btnRecord.text = getString(R.string.start_listening)
+                    binding.tvStatus.text = getString(R.string.state_ready)
                     binding.ivHeatmapOverlay.visibility = View.GONE
-                    binding.tvAudioSelection.visibility = View.GONE
+                    binding.tvGate.visibility = View.GONE
+                    binding.modelGroup.isEnabled = true
                 }
                 is UiState.Streaming -> {
-                    binding.progressBar.visibility = View.GONE
                     binding.btnRecord.isEnabled = true
-                    binding.btnRecord.text = "Stop Processing"
-                    val (first, second) = profile.streamLabels
-                    binding.tvStatus.text =
-                        "Listening (${profile.displayName})… first result in ~${profile.expectedFirstResultMs / 1000.0}s — tap overlay to solo $first/$second"
+                    binding.btnRecord.text = getString(R.string.stop_listening)
+                    binding.tvStatus.text = getString(
+                        R.string.state_buffering,
+                        "%.1f".format(profile.expectedFirstResultMs / 1000.0)
+                    )
                     binding.ivHeatmapOverlay.visibility = View.VISIBLE
-                    binding.tvAudioSelection.visibility = View.VISIBLE
+                    binding.ivHeatmapOverlay.alpha = 0f
+                    hasFirstResult = false
+                    startBufferHairline()
                 }
                 is UiState.Error -> {
                     stopLiveStreaming()
-                    binding.tvStatus.text = "❌ Error: ${state.message}"
+                    binding.tvStatus.text = describeError(state.message)
                     Log.e("SonicSight", "UI Error: ${state.message}")
                 }
                 else -> {}
@@ -363,28 +373,47 @@ class MainActivity : AppCompatActivity() {
             // draw pipeline, causing 'Canvas: trying to use a recycled bitmap' crashes.
             // The GC will reclaim it once the ImageView releases its reference.
             binding.ivHeatmapOverlay.setImageBitmap(bitmap)
-            binding.tvStatus.text = "Live Heatmap Active"
+            binding.tvGate.visibility = View.GONE
+            if (!hasFirstResult) {
+                // The one orchestrated moment: the veil arrives.
+                hasFirstResult = true
+                binding.progressBar.visibility = View.GONE
+                binding.tvStatus.text = getString(R.string.state_live)
+                if (reducedMotion()) {
+                    binding.ivHeatmapOverlay.alpha = 0.75f
+                } else {
+                    binding.ivHeatmapOverlay.animate().alpha(0.75f).setDuration(300).start()
+                }
+            }
         }
 
         viewModel.playbackMode.observe(this) { mode ->
             applyPlaybackMode(mode)
-            // Stream labels come from the model profile: Left/Right for
-            // Sound of Pixels, On-screen/Off-screen for multisensory.
-            val (first, second) = profile.streamLabels
-            val modeText = when (mode) {
-                PlaybackMode.BOTH -> "Audio: BOTH"
-                PlaybackMode.LEFT_ONLY -> "Audio: ${first.uppercase()}"
-                PlaybackMode.RIGHT_ONLY -> "Audio: ${second.uppercase()}"
+            val checkedId = when (mode) {
+                PlaybackMode.BOTH -> binding.btnSoloBoth.id
+                PlaybackMode.LEFT_ONLY -> binding.btnSoloFirst.id
+                PlaybackMode.RIGHT_ONLY -> binding.btnSoloSecond.id
             }
-            binding.tvAudioSelection.text = modeText
-            if (isRecording) {
-                Toast.makeText(this, modeText, Toast.LENGTH_SHORT).show()
+            if (binding.soloGroup.checkedButtonId != checkedId) {
+                binding.soloGroup.check(checkedId)
             }
         }
 
         viewModel.currentProfile.observe(this) { p ->
             profile = p
-            binding.btnModel.text = p.displayName
+            // Stream labels and legend meaning come from the profile:
+            // Left/Right + Loud/Quiet for music, On-screen/Off-screen +
+            // Matches audio/No match for speech. Never hard-coded.
+            binding.btnSoloFirst.text = p.streamLabels.first
+            binding.btnSoloSecond.text = p.streamLabels.second
+            binding.tvLegendHigh.text = p.heatmapMeaning.first
+            binding.tvLegendLow.text = p.heatmapMeaning.second
+            val modelButtonId =
+                if (p.id == ModelProfile.MULTISENSORY.id) binding.btnModelSpeech.id
+                else binding.btnModelMusic.id
+            if (binding.modelGroup.checkedButtonId != modelButtonId) {
+                binding.modelGroup.check(modelButtonId)
+            }
         }
 
         viewModel.noLocalization.observe(this) { gated ->
@@ -393,10 +422,40 @@ class MainActivity : AppCompatActivity() {
                 // sound is. Clear the overlay instead of showing garbage;
                 // separated audio keeps playing.
                 binding.ivHeatmapOverlay.setImageDrawable(null)
-                if (isRecording) {
-                    binding.tvStatus.text = "Listening — no confident on-screen source"
-                }
+                binding.tvGate.visibility = View.VISIBLE
+            } else {
+                binding.tvGate.visibility = View.GONE
             }
+        }
+    }
+
+    /** Fill the hairline over the model's expected first-result time, so
+     *  the buffering wait is honest, not indeterminate. */
+    private fun startBufferHairline() {
+        binding.progressBar.visibility = View.VISIBLE
+        binding.progressBar.progress = 0
+        if (reducedMotion()) {
+            // No animation: leave a static, truthful track instead.
+            binding.progressBar.progress = 500
+            return
+        }
+        android.animation.ObjectAnimator.ofInt(binding.progressBar, "progress", 0, 1000)
+            .setDuration(profile.expectedFirstResultMs)
+            .start()
+    }
+
+    /** Map raw stream errors to copy that says what to do next. */
+    private fun describeError(raw: String?): String {
+        val msg = raw ?: ""
+        return when {
+            msg.contains("not loaded", ignoreCase = true) ||
+                msg.contains("Unknown model", ignoreCase = true) ->
+                getString(R.string.error_model_unavailable, profile.displayName)
+            msg.contains("UNAVAILABLE", ignoreCase = true) ||
+                msg.contains("io exception", ignoreCase = true) ||
+                msg.contains("deadline", ignoreCase = true) ->
+                getString(R.string.error_server_unreachable, GrpcModule.currentHost())
+            else -> getString(R.string.error_generic, msg.ifEmpty { "unknown error" })
         }
     }
 

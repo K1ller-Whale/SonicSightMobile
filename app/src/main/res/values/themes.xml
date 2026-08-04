@@ -1,9 +1,33 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.SonicSight" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+    <!-- The viewfinder is the hero: the app is always a dark surface the
+         camera shows through, in day and night alike, so the single theme
+         is dark by design (values-night inherits it unchanged). -->
+    <style name="Base.Theme.SonicSight" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/ember</item>
+        <item name="colorOnPrimary">@color/void_</item>
+        <item name="colorSecondary">@color/fuchsia</item>
+        <item name="colorOnSecondary">@color/chalk</item>
+        <item name="android:colorBackground">@color/void_</item>
+        <item name="colorSurface">@color/void_</item>
+        <item name="colorOnSurface">@color/chalk</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/void_</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 
     <style name="Theme.SonicSight" parent="Base.Theme.SonicSight" />
+
+    <!-- Display face: condensed, instrumentation register. Used sparingly —
+         model names and the record control only. -->
+    <style name="TextAppearance.SonicSight.Display" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:fontFamily">sans-serif-condensed-medium</item>
+        <item name="android:textColor">@color/chalk</item>
+    </style>
+
+    <!-- Data face: the live ticker speaks in monospace, like the
+         instrument it is. -->
+    <style name="TextAppearance.SonicSight.Ticker" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textColor">@color/chalk</item>
+    </style>
 </resources>
