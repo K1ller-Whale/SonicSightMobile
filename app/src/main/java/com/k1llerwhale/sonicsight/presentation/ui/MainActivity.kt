@@ -261,38 +261,68 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("ClickableViewAccessibility")
     private fun setupPixelTouch() {
         var lastCell: Pair<Int, Int>? = null
+        var downNorm: com.k1llerwhale.sonicsight.util.CoordinateMap.Norm? = null
+        var downCell: Pair<Int, Int>? = null
+        var dragged = false
+        var longPressFired = false
+        var longPressRunnable: Runnable? = null
+
         binding.ivHeatmapOverlay.setOnTouchListener { view, event ->
             if (!profile.isPixel || !isRecording) return@setOnTouchListener false
             val fw = lastFrameW; val fh = lastFrameH
             if (fw <= 0 || fh <= 0) return@setOnTouchListener false
+            val norm = com.k1llerwhale.sonicsight.util.CoordinateMap.viewToQueryNorm(
+                event.x, event.y,
+                view.width.toFloat(), view.height.toFloat(),
+                fw.toFloat(), fh.toFloat(),
+            )
+            val g = viewModel.gridDims
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                    val n = com.k1llerwhale.sonicsight.util.CoordinateMap.viewToQueryNorm(
-                        event.x, event.y,
-                        view.width.toFloat(), view.height.toFloat(),
-                        fw.toFloat(), fh.toFloat(),
-                    ) ?: return@setOnTouchListener true
-                    val g = viewModel.gridDims
-                    val cell = com.k1llerwhale.sonicsight.util.CoordinateMap.normToCell(
-                        n.x, n.y, g.first, g.second
-                    )
-                    // One query per tap (DOWN) or per grid cell crossed in a
-                    // drag — never one per touch event, and never a duplicate
-                    // on finger-up (review finding: DOWN+UP double-queried).
+                MotionEvent.ACTION_DOWN -> {
+                    norm ?: return@setOnTouchListener true
+                    val cell = com.k1llerwhale.sonicsight.util.CoordinateMap.normToCell(n = norm, g)
+                    downNorm = norm; downCell = cell; lastCell = cell
+                    dragged = false; longPressFired = false
+                    // Hold to FOLLOW: the live stream becomes this region.
+                    longPressRunnable = Runnable {
+                        if (!dragged) {
+                            longPressFired = true
+                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            binding.gridLattice.setStickyCell(cell.first, cell.second)
+                            viewModel.startFollow(norm.x, norm.y, 1.0f / g.first)
+                        }
+                    }
+                    view.postDelayed(longPressRunnable, 450)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    norm ?: return@setOnTouchListener true
+                    val cell = com.k1llerwhale.sonicsight.util.CoordinateMap.normToCell(n = norm, g)
                     if (cell != lastCell) {
+                        dragged = true
+                        longPressRunnable?.let { view.removeCallbacks(it) }
                         lastCell = cell
                         view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                        // The tap answers in the model's own vocabulary: the
-                        // CELL lights, not a crosshair.
                         binding.gridLattice.showTappedCell(cell.first, cell.second, reducedMotion())
-                        // Fingertip-sized neighbourhood, honest about the
-                        // grid: radius ~1 cell.
-                        viewModel.sendPixelQuery(n.x, n.y, 1.0f / g.first)
+                        viewModel.sendPixelQuery(norm.x, norm.y, 1.0f / g.first)
                     }
                     true
                 }
-                MotionEvent.ACTION_UP -> {
-                    lastCell = null
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    longPressRunnable?.let { view.removeCallbacks(it) }
+                    // Short tap without drag: one-shot region replay (the
+                    // last couple of seconds, filtered to the cell).
+                    if (!longPressFired && !dragged &&
+                        event.actionMasked == MotionEvent.ACTION_UP
+                    ) {
+                        val cell = downCell; val dn = downNorm
+                        if (cell != null && dn != null) {
+                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            binding.gridLattice.showTappedCell(cell.first, cell.second, reducedMotion())
+                            viewModel.sendPixelQuery(dn.x, dn.y, 1.0f / g.first)
+                        }
+                    }
+                    lastCell = null; downCell = null; downNorm = null
                     view.performClick()
                     true
                 }
@@ -300,6 +330,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun com.k1llerwhale.sonicsight.util.CoordinateMap.normToCell(
+        n: com.k1llerwhale.sonicsight.util.CoordinateMap.Norm, g: Pair<Int, Int>,
+    ) = normToCell(n.x, n.y, g.first, g.second)
 
     /** Play a query's region audio once, ducking the mixture underneath. */
     private fun collectQueryAudio() {
@@ -699,6 +733,15 @@ class MainActivity : AppCompatActivity() {
             binding.btnFreeze.text = getString(if (f) R.string.unfreeze else R.string.freeze)
             binding.tvFrozen.visibility =
                 if (f && profile.isPixel) View.VISIBLE else View.GONE
+        }
+
+        viewModel.following.observe(this) { f ->
+            binding.tvFollowing.visibility =
+                if (f && profile.isPixel) View.VISIBLE else View.GONE
+            if (!f) binding.gridLattice.clearStickyCell()
+        }
+        binding.tvFollowing.setOnClickListener {
+            viewModel.soloSource(null)  // clears both a dot solo and a held-cell follow
         }
 
         viewModel.noLocalization.observe(this) { gated ->

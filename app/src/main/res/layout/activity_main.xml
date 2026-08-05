@@ -150,6 +150,27 @@
         android:layout_marginEnd="12dp"
         android:layout_marginTop="4dp" />
 
+    <!-- Follow-state pill: live audio is a selected region, not the mix. -->
+    <TextView
+        android:id="@+id/tvFollowing"
+        style="@style/TextAppearance.SonicSight.Ticker"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="72dp"
+        android:background="@drawable/gate_pill_bg"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="6dp"
+        android:text="@string/following_pill"
+        android:textColor="@color/glow"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:contentDescription="@string/cd_following_pill"
+        android:accessibilityLiveRegion="polite"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        android:layout_marginStart="16dp" />
+
     <!-- Held-state pill: the map is pinned, the camera keeps running. -->
     <TextView
         android:id="@+id/tvFrozen"
