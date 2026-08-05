@@ -90,6 +90,34 @@ message InferenceResult {
   int64 processing_time_ms = 10;
 }
 
+// A spatial query in pixel mode (model id "sonicsight-pixel"). Coordinates
+// are normalized to the letterboxed 224x224 frame space — the one space both
+// client and server can compute exactly.
+message PixelQuery {
+  int32 query_id    = 1;  // client-assigned, echoed back in PixelAudio
+  float x_norm      = 2;  // 0..1
+  float y_norm      = 3;  // 0..1
+  float radius_norm = 4;  // 0 = single feature cell; >0 = pooled neighbourhood
+  int64 window_id   = 5;  // 0 = newest cached window; else a pinned window's id
+}
+
+message PixelAudio {
+  int32 query_id     = 1;
+  bytes pcm          = 2;  // PCM16 mono 11025 Hz, one analysis window long
+  int32 sample_count = 3;
+  float energy       = 4;  // linear-domain region energy; drives "nothing here"
+  int64 window_id    = 5;  // window this audio was synthesized from
+  string error       = 6;  // non-empty: requested window evicted, or query cap hit
+}
+
+message SourceCluster {
+  int32  cluster_id = 1;
+  float  centroid_x = 2;  // normalized, letterboxed frame space
+  float  centroid_y = 3;
+  float  energy     = 4;
+  uint32 rgb        = 5;  // stable colour, carried across windows by the server
+}
+
 // Sent by mobile client continuously as a stream
 message StreamChunk {
   // Timestamp in milliseconds (relative to start of recording)
@@ -121,6 +149,20 @@ message StreamChunk {
   // Raw PCM audio chunk (16-bit signed, mono, 22050 Hz).
   // Used by the "multisensory" model branch instead of audio_pcm.
   bytes audio_pcm_hi = 9;
+
+  // ── Pixel mode ("sonicsight-pixel") ──
+  // In-band spatial queries against the server's cached window state.
+  // Queries ride the stream because the stream owns the cache; capped at 4
+  // per chunk — excess queries are answered with an error PixelAudio.
+  repeated PixelQuery queries = 10;
+
+  // Ask the server to compute/refresh source clusters for the window.
+  bool request_clusters = 11;
+
+  // Pin the newest completed window: it becomes exempt from cache eviction
+  // so queries carrying its window_id keep answering while the user
+  // explores a frozen scene. The server keeps advancing windows normally.
+  bool freeze = 12;
 }
 
 // Returned by server continuously as a stream
@@ -186,4 +228,31 @@ message StreamResult {
   // overlay; separated audio still plays. Always 0.0 for models without a
   // confidence gate (sonicsight).
   float cam_confidence = 17;
+
+  // ── Pixel mode ("sonicsight-pixel") ──
+  // In pixel mode the legacy fields are repurposed DELIBERATELY:
+  // left_audio_pcm carries the UNSEPARATED MIXTURE (the mixer baseline the
+  // client needs for mix/solo), right_audio_pcm is empty, and
+  // left_heatmap/right_heatmap are empty — the native-resolution energy map
+  // below is the only spatial payload, so a result never carries two
+  // heatmap-shaped payloads with different semantics.
+  repeated PixelAudio pixel_audio = 18;
+
+  // Per-cell sound energy at the model's NATIVE feature grid (currently
+  // 14x14 for a 224x224 input), row-major uint8, EMA-smoothed across
+  // windows. Dimensions are explicit — the client interpolates; the server
+  // never resamples up to fake resolution the model does not have.
+  bytes energy_map = 19;
+  int32 grid_width = 20;
+  int32 grid_height = 21;
+
+  // Source discovery: cluster label per cell (uint8, row-major, 255 =
+  // silence) plus one SourceCluster per discovered source. Labels and
+  // colours are matched across windows server-side so they do not strobe.
+  bytes cluster_labels = 22;
+  repeated SourceCluster clusters = 23;
+
+  // Which cached window the energy map, clusters and mixture in this result
+  // describe (matches PixelQuery/PixelAudio window_id).
+  int64 window_id = 24;
 }
