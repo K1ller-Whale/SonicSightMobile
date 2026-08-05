@@ -156,7 +156,11 @@ message StreamChunk {
   // per chunk — excess queries are answered with an error PixelAudio.
   repeated PixelQuery queries = 10;
 
-  // Ask the server to compute/refresh source clusters for the window.
+  // Source discovery enable. Set true on any chunk at least once per second
+  // while the cluster UI is active; the server latches it for ~1 s past the
+  // last request (audio and frame chunks come from different client threads,
+  // so a strict per-chunk level would flap). Letting it expire is the off
+  // switch and resets cluster identity state server-side.
   bool request_clusters = 11;
 
   // Freeze is LEVEL-triggered: hold true on every chunk while the user is
