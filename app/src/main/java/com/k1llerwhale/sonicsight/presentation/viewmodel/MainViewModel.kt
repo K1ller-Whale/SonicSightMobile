@@ -80,6 +80,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var gridDims: Pair<Int, Int> = 14 to 14
         private set
 
+    /** A discovered source: colour is identity, never an instrument name. */
+    data class SourceInfo(
+        val id: Int, val rgb: Int, val energy: Float,
+        val cx: Float, val cy: Float,
+    )
+
+    private val _sources = MutableLiveData<List<SourceInfo>>(emptyList())
+    val sources: LiveData<List<SourceInfo>> = _sources
+
+    /** Client-side solo: id of the source whose region audio is playing
+     *  alone, or null for the full mix. */
+    private val _soloedSource = MutableLiveData<Int?>(null)
+    val soloedSource: LiveData<Int?> = _soloedSource
+
+    fun soloSource(s: SourceInfo?) {
+        _soloedSource.value = s?.id
+        if (s != null) {
+            // Query at the source's centroid, radius sized to a small
+            // neighbourhood (~1.5 cells) — an approximation of the cluster's
+            // support; the true per-cluster mask ride is a documented next step.
+            sendPixelQuery(s.cx, s.cy, 1.5f / gridDims.first)
+        }
+    }
+
     /** True once at least one pixel overlay was rendered this stream —
      *  lets a pre-first-result freeze still show the first map instead of
      *  wedging the UI in 'buffering' (review finding). */
@@ -283,6 +307,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (response.gridWidth > 0 && response.gridHeight > 0) {
                     gridDims = response.gridWidth to response.gridHeight
                 }
+                val maxEnergy = response.clustersList.maxOfOrNull { it.energy } ?: 0f
+                val infos = response.clustersList.map {
+                    SourceInfo(
+                        it.clusterId, it.rgb,
+                        if (maxEnergy > 0f) it.energy / maxEnergy else 0f,
+                        it.centroidX, it.centroidY,
+                    )
+                }
+                withContext(Dispatchers.Main) { _sources.value = infos }
                 withContext(Dispatchers.IO) {
                     val colors = response.clustersList.associate { it.clusterId to it.rgb }
                     val overlay = maskProcessor.createPixelOverlay(
