@@ -49,6 +49,24 @@ class GridLatticeView @JvmOverloads constructor(
     private var cellAlpha = 0f
     private var animator: ValueAnimator? = null
 
+    // The followed (sticky) cell stays lit in glow while the live stream
+    // plays its region.
+    private var stickyCol = -1
+    private var stickyRow = -1
+    private val stickyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFCFDBF.toInt()  // glow — same voice as the soloed dot ring
+        strokeWidth = 3f
+        style = Paint.Style.STROKE
+    }
+
+    fun setStickyCell(col: Int, row: Int) {
+        stickyCol = col; stickyRow = row; invalidate()
+    }
+
+    fun clearStickyCell() {
+        stickyCol = -1; stickyRow = -1; invalidate()
+    }
+
     fun setGridTransform(
         originX: Float, originY: Float, cellSize: Float,
         gridW: Int, rowTop: Int, rowBottom: Int,
@@ -104,6 +122,12 @@ class GridLatticeView @JvmOverloads constructor(
             val l = originX + tappedCol * cellSize
             val t = originY + tappedRow * cellSize
             canvas.drawRect(l + 1.5f, t + 1.5f, l + cellSize - 1.5f, t + cellSize - 1.5f, cellPaint)
+        }
+
+        if (stickyCol >= 0) {
+            val l = originX + stickyCol * cellSize
+            val t = originY + stickyRow * cellSize
+            canvas.drawRect(l + 1.5f, t + 1.5f, l + cellSize - 1.5f, t + cellSize - 1.5f, stickyPaint)
         }
     }
 }

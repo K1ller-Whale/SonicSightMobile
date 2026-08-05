@@ -26,6 +26,8 @@
     <string name="query_nothing_here">No sound detected here</string>
     <string name="query_error">Touch again — %1$s</string>
     <string name="frozen_pill">Held — touch to explore</string>
+    <string name="following_pill">Following your selection — tap to stop</string>
+    <string name="cd_following_pill">Live audio is following the selected spot. Double-tap to hear everything again.</string>
     <string name="hint_headphones">Headphones make the separation much clearer</string>
 
     <!-- Ways-to-listen hints: truth copy, chosen by what you point at -->

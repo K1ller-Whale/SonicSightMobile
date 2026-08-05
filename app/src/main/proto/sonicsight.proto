@@ -99,6 +99,13 @@ message PixelQuery {
   float y_norm      = 3;  // 0..1
   float radius_norm = 4;  // 0 = single feature cell; >0 = pooled neighbourhood
   int64 window_id   = 5;  // 0 = newest cached window; else a pinned window's id
+
+  // Sticky follow: instead of a one-shot PixelAudio answer, this region
+  // becomes the stream's followed selection — every subsequent window's
+  // left_audio_pcm carries the REGION's audio (OLA-stitched, live, ~3 s
+  // perceived latency) in place of the mixture, until StreamChunk.clear_sticky
+  // or a new sticky query replaces it. Sticky queries get no PixelAudio.
+  bool sticky = 6;
 }
 
 message PixelAudio {
@@ -164,6 +171,10 @@ message StreamChunk {
   // so a strict per-chunk level would flap). Letting it expire is the off
   // switch and resets cluster identity state server-side.
   bool request_clusters = 11;
+
+  // Release the sticky followed region: the live stream returns to the
+  // unseparated mixture from the next window on.
+  bool clear_sticky = 13;
 
   // Freeze is LEVEL-triggered: hold true on every chunk while the user is
   // exploring a frozen scene, false to release. On the rising edge the

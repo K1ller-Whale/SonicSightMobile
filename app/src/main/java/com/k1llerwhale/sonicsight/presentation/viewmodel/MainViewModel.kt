@@ -97,10 +97,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun soloSource(s: SourceInfo?) {
         _soloedSource.value = s?.id
         if (s != null) {
-            // Query at the source's centroid, radius sized to a small
-            // neighbourhood (~1.5 cells) — an approximation of the cluster's
-            // support; the true per-cluster mask ride is a documented next step.
-            sendPixelQuery(s.cx, s.cy, 1.5f / gridDims.first)
+            // Solo = LIVE follow at the source's centroid (~1.5-cell disc,
+            // an approximation of the cluster support): the stream's audio
+            // becomes this source until un-soloed. Not a one-shot replay.
+            startFollow(s.cx, s.cy, 1.5f / gridDims.first)
+        } else {
+            stopFollow()
         }
     }
 
@@ -128,14 +130,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Send a tap/drag query. Suspending emit — a query must never be
-     *  silently dropped by a saturated out-queue. */
-    fun sendPixelQuery(xNorm: Float, yNorm: Float, radiusNorm: Float) {
+     *  silently dropped by a saturated out-queue. `sticky` turns the query
+     *  into a live follow: the stream's audio becomes this region instead
+     *  of the mixture until stopFollow(). */
+    fun sendPixelQuery(xNorm: Float, yNorm: Float, radiusNorm: Float, sticky: Boolean = false) {
         val q = com.k1llerwhale.sonicsight.grpc.PixelQuery.newBuilder()
             .setQueryId(nextQueryId++)
             .setXNorm(xNorm)
             .setYNorm(yNorm)
             .setRadiusNorm(radiusNorm)
             .setWindowId(0)  // newest; server redirects to the pinned window while frozen
+            .setSticky(sticky)
             .build()
         val chunk = StreamChunk.newBuilder()
             .addQueries(q)
@@ -143,6 +148,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .setRequestClusters(true)
             .build()
         viewModelScope.launch { outStreamChunks.emit(chunk) }
+    }
+
+    /** True while the live stream is following a selected region. */
+    private val _following = MutableLiveData(false)
+    val following: LiveData<Boolean> = _following
+
+    fun startFollow(xNorm: Float, yNorm: Float, radiusNorm: Float) {
+        _following.value = true
+        sendPixelQuery(xNorm, yNorm, radiusNorm, sticky = true)
+    }
+
+    fun stopFollow() {
+        if (_following.value == true) {
+            _following.value = false
+            val chunk = StreamChunk.newBuilder()
+                .setClearSticky(true)
+                .setFreeze(frozen)
+                .setRequestClusters(true)
+                .build()
+            viewModelScope.launch { outStreamChunks.emit(chunk) }
+        }
     }
 
     // Live results for UI overlay
@@ -187,6 +213,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = UiState.Streaming
         _noLocalization.value = false
         setFrozen(false)  // a freeze armed while idle must not wedge the stream
+        _following.value = false
+        _soloedSource.value = null
         hasPixelOverlay = false
         lastSeqNumber = -1
         lastResultTimeMs = 0L
