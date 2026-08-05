@@ -40,6 +40,9 @@ data class ModelProfile(
     val confidenceGated: Boolean,
     /** Rough perceived lag, for honest buffering copy. */
     val expectedFirstResultMs: Long,
+    /** Touch mode: energy map + on-demand region queries instead of fixed
+     *  left/right tracks. Mirrors the server spec's mode="pixel". */
+    val isPixel: Boolean = false,
 ) {
     companion object {
         /** The only rate Android guarantees on AudioRecord. */
@@ -75,8 +78,25 @@ data class ModelProfile(
             expectedFirstResultMs = 1200L,   // ~half the 2.1 s window
         )
 
+        val SONICSIGHT_PIXEL = ModelProfile(
+            id = "sonicsight-pixel",
+            displayName = "Touch",
+            frameIntervalMs = 125L,          // 8 fps, same cadence as halves
+            decimFactor = 4,                 // 44100/4 = 11025 — SAME audio as halves;
+                                             // full frames do NOT imply the hi rate
+            decimCutoffHz = 5000.0,
+            streamRate = 11025,
+            frameKind = FrameKind.FULL_LETTERBOXED,
+            heatmapCount = 0,                // energy map replaces legacy heatmaps
+            streamLabels = "Selection" to "Everything else",
+            heatmapMeaning = "Loud" to "Quiet",
+            confidenceGated = false,
+            expectedFirstResultMs = 3000L,   // same 5.9 s window as halves
+            isPixel = true,
+        )
+
         val DEFAULT = SONICSIGHT
-        val ALL = listOf(SONICSIGHT, MULTISENSORY)
+        val ALL = listOf(SONICSIGHT, MULTISENSORY, SONICSIGHT_PIXEL)
 
         fun byId(id: String): ModelProfile = ALL.firstOrNull { it.id == id } ?: DEFAULT
 

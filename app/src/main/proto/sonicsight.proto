@@ -105,7 +105,9 @@ message PixelAudio {
   int32 query_id     = 1;
   bytes pcm          = 2;  // PCM16 mono 11025 Hz, one analysis window long
   int32 sample_count = 3;
-  float energy       = 4;  // linear-domain region energy; drives "nothing here"
+  float energy       = 4;  // RELATIVE: fraction of the window's mixture energy
+                           // in the region, 0..1 — scale-free so the client's
+                           // "nothing here" gate is meaningful
   int64 window_id    = 5;  // window this audio was synthesized from
   string error       = 6;  // non-empty: requested window evicted, or query cap hit
 }
