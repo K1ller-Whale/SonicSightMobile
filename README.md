@@ -15,14 +15,16 @@ By dynamically offloading heavy PyTorch AI processing to the server while retain
 
 ## ✨ Features
 
-- 🎚️ **User-selectable models**: a first-class switch between
-  **Music & instruments** (Sound of Pixels — separates by left/right screen
-  region, two heatmaps) and **Speech** (multisensory — separates
-  on-screen/off-screen by audio-video alignment, one heatmap). Each model is a
-  `ModelProfile` (frame rate, wire sample rate, frame format, labels); the
-  selection rides the `sonicsight-model` gRPC metadata key, and switching
-  always cancels the stream and reopens it. Results whose echoed `model_id`
-  doesn't match the current selection are dropped.
+- 🎚️ **Three ways to listen**: **Left–Right** (Sound of Pixels — splits the
+  scene down the middle, two tracks, nothing to tap), **Touch** (same
+  checkpoint — hear any point you pick on the model's real 14×8 grid, with
+  discovered sources as CVD-safe colour dots you can solo, plus Freeze to
+  explore a held scene), and **Speech** (multisensory — on-screen vs
+  off-screen). Each is a `ModelProfile`; selection rides the
+  `sonicsight-model` gRPC metadata key, switching always cancels and reopens
+  the stream, and results whose echoed `model_id` doesn't match are dropped.
+  The touch coordinate chain (view → inverse fillCenter → letterbox → grid
+  cell) lives in `CoordinateMap` with JVM unit tests.
 - 🚀 **Bidirectional gRPC streaming**: raw JPEG frames + PCM chunks up, separated
   audio + heatmaps back, continuously.
 - 🎨 **Spectral heatmap overlay**: server heatmaps (56×56 uint8 on the wire,
