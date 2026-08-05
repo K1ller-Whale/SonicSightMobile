@@ -36,6 +36,20 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <!-- The sounding lattice: the model's true grid, whisper-thin, over the
+         content region. Touch mode only; never consumes touches. -->
+    <com.k1llerwhale.sonicsight.presentation.ui.GridLatticeView
+        android:id="@+id/gridLattice"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        android:clickable="false"
+        android:importantForAccessibility="no"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <View
         android:id="@+id/scrimTop"
         android:layout_width="match_parent"
@@ -136,6 +150,38 @@
         android:layout_marginEnd="12dp"
         android:layout_marginTop="4dp" />
 
+    <!-- Held-state pill: the map is pinned, the camera keeps running. -->
+    <TextView
+        android:id="@+id/tvFrozen"
+        style="@style/TextAppearance.SonicSight.Ticker"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="40dp"
+        android:layout_marginEnd="56dp"
+        android:background="@drawable/gate_pill_bg"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="6dp"
+        android:text="@string/frozen_pill"
+        android:textColor="@color/glow"
+        android:visibility="gone"
+        android:accessibilityLiveRegion="polite"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Discovered sources: colour is identity, the bar is energy. Chips are
+         added in code, one per source the model currently hears. -->
+    <LinearLayout
+        android:id="@+id/sourceRail"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:visibility="gone"
+        android:layout_marginBottom="8dp"
+        app:layout_constraintBottom_toTopOf="@id/modelGroup"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <!-- Honest low-confidence state: shown when a gated model reports the
          heatmap would be meaningless. Audio keeps playing. -->
     <TextView
@@ -206,10 +252,10 @@
         android:contentDescription="@string/cd_model_switch"
         app:singleSelection="true"
         app:selectionRequired="true"
-        app:layout_constraintBottom_toTopOf="@id/btnRecord"
+        app:layout_constraintBottom_toTopOf="@id/tvModeHint"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginBottom="12dp">
+        android:layout_marginBottom="6dp">
 
         <Button
             android:id="@+id/btnModelMusic"
@@ -254,6 +300,22 @@
         app:layout_constraintBottom_toTopOf="@id/soloGroup"
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginEnd="16dp" />
+
+    <!-- Truth copy for the active way of listening -->
+    <TextView
+        android:id="@+id/tvModeHint"
+        style="@style/TextAppearance.SonicSight.Ticker"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:textSize="11sp"
+        android:textColor="@color/chalk_dim"
+        android:layout_marginHorizontal="32dp"
+        android:layout_marginBottom="6dp"
+        android:text="@string/mode_hint_halves"
+        app:layout_constraintBottom_toTopOf="@id/btnRecord"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
 
     <Button
         android:id="@+id/btnRecord"

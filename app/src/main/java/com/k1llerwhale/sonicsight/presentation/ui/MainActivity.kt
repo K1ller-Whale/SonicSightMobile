@@ -230,10 +230,23 @@ class MainActivity : AppCompatActivity() {
         // and the axes only match while the wire grid is square.
         val sx = (dim / bmpW) / s1 * s2
         val sy = (dim / bmpH) / s1 * s2
+        val tx = -lbOffX / s1 * s2 + vOffX
+        val ty = -lbOffY / s1 * s2 + vOffY
         val m = Matrix()
         m.setScale(sx, sy)
-        m.postTranslate(-lbOffX / s1 * s2 + vOffX, -lbOffY / s1 * s2 + vOffY)
+        m.postTranslate(tx, ty)
         binding.ivHeatmapOverlay.imageMatrix = m
+
+        // The lattice shares the exact same registration: letterbox origin at
+        // (tx, ty), one 16-letterbox-px cell = 16/s1*s2 view px, lattice
+        // drawn over the content rows only.
+        val g = viewModel.gridDims
+        val cellLb = dim / g.first
+        val rowTop = (lbOffY / cellLb).toInt()
+        val rowBottom = kotlin.math.ceil((lbOffY + fh * s1) / cellLb).toInt() - 1
+        binding.gridLattice.setGridTransform(
+            tx, ty, cellLb / s1 * s2, g.first, rowTop, rowBottom,
+        )
     }
 
     private fun modelButtonIdFor(p: ModelProfile) = when (p.id) {
@@ -269,6 +282,9 @@ class MainActivity : AppCompatActivity() {
                     if (cell != lastCell) {
                         lastCell = cell
                         view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        // The tap answers in the model's own vocabulary: the
+                        // CELL lights, not a crosshair.
+                        binding.gridLattice.showTappedCell(cell.first, cell.second, reducedMotion())
                         // Fingertip-sized neighbourhood, honest about the
                         // grid: radius ~1 cell.
                         viewModel.sendPixelQuery(n.x, n.y, 1.0f / g.first)
@@ -341,6 +357,57 @@ class MainActivity : AppCompatActivity() {
             }, durationMs + 100)
         } catch (e: Exception) {
             Log.e("SonicSight", "query playback failed: ${e.message}")
+        }
+    }
+
+    /** One chip per discovered source: a colour dot whose fill height is the
+     *  source's relative energy. Tap to hear it alone; tap again for the
+     *  full mix. Colour is identity — sources are never named. */
+    private fun renderSourceRail(sources: List<com.k1llerwhale.sonicsight.presentation.viewmodel.MainViewModel.SourceInfo>) {
+        val rail = binding.sourceRail
+        rail.removeAllViews()
+        if (!profile.isPixel) return
+        val soloed = viewModel.soloedSource.value
+        val density = resources.displayMetrics.density
+        for (s in sources) {
+            val dot = View(this)
+            val size = (28 * density).toInt()
+            val lp = android.widget.LinearLayout.LayoutParams(size, size)
+            lp.marginEnd = (10 * density).toInt()
+            dot.layoutParams = lp
+            val bg = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(0xFF000000.toInt() or s.rgb)
+                // Energy as ring thickness is unreadable at 28dp; encode it
+                // as alpha instead: quiet sources sit back, loud sit forward.
+                alpha = (80 + 175 * s.energy).toInt().coerceIn(80, 255)
+                if (s.id == soloed) {
+                    setStroke((3 * density).toInt(), 0xFFFCFDBF.toInt())  // glow ring = playing alone
+                }
+            }
+            dot.background = bg
+            val colorName = getString(
+                when (s.rgb) {
+                    0x4477AA -> R.string.color_blue
+                    0xCCBB44 -> R.string.color_sand
+                    else -> R.string.color_purple
+                }
+            )
+            dot.contentDescription =
+                if (s.id == soloed) getString(R.string.cd_source_chip_soloed, colorName)
+                else getString(R.string.cd_source_chip, colorName, (s.energy * 100).toInt())
+            dot.isClickable = true
+            dot.isFocusable = true
+            dot.setOnClickListener {
+                if (viewModel.soloedSource.value == s.id) {
+                    viewModel.soloSource(null)          // back to the mix
+                    releaseQueryTrack()
+                    audioTrackLeft?.setVolume(1.0f)
+                } else {
+                    viewModel.soloSource(s)             // region audio arrives as a query answer
+                }
+            }
+            rail.addView(dot)
         }
     }
 
@@ -548,7 +615,19 @@ class MainActivity : AppCompatActivity() {
             binding.ivHeatmapOverlay.contentDescription =
                 if (p.isPixel) getString(R.string.cd_touch_surface) else getString(R.string.cd_viewfinder)
             binding.ivHeatmapOverlay.isClickable = p.isPixel
+            binding.gridLattice.visibility = if (p.isPixel) View.VISIBLE else View.GONE
+            binding.sourceRail.visibility = if (p.isPixel) View.VISIBLE else View.GONE
+            binding.tvModeHint.text = getString(
+                when (p.id) {
+                    ModelProfile.MULTISENSORY.id -> R.string.mode_hint_speech
+                    ModelProfile.SONICSIGHT_PIXEL.id -> R.string.mode_hint_touch
+                    else -> R.string.mode_hint_halves
+                }
+            )
         }
+
+        viewModel.sources.observe(this) { sources -> renderSourceRail(sources) }
+        viewModel.soloedSource.observe(this) { renderSourceRail(viewModel.sources.value ?: emptyList()) }
 
         viewModel.uiState.observe(this) { state ->
             when(state) {
@@ -618,6 +697,8 @@ class MainActivity : AppCompatActivity() {
 
         viewModel.frozenLive.observe(this) { f ->
             binding.btnFreeze.text = getString(if (f) R.string.unfreeze else R.string.freeze)
+            binding.tvFrozen.visibility =
+                if (f && profile.isPixel) View.VISIBLE else View.GONE
         }
 
         viewModel.noLocalization.observe(this) { gated ->
@@ -692,6 +773,16 @@ class MainActivity : AppCompatActivity() {
 
         isRecording = true
         recordingStartTime = SystemClock.elapsedRealtime()
+
+        // Headphones change the experience substantially — said once, then
+        // never again (a hint, not a nag).
+        val prefs = getSharedPreferences("sonicsight_prefs", MODE_PRIVATE)
+        if (!prefs.getBoolean("hint_headphones_shown", false)) {
+            prefs.edit().putBoolean("hint_headphones_shown", true).apply()
+            binding.tvStatus.postDelayed(
+                { binding.tvStatus.text = getString(R.string.hint_headphones) }, 600
+            )
+        }
 
         // Reset encode instrumentation for this session
         perfWindowStartMs = 0L

@@ -25,6 +25,21 @@
     <string name="query_playing">Playing the sound from where you touched</string>
     <string name="query_nothing_here">No sound detected here</string>
     <string name="query_error">Touch again — %1$s</string>
+    <string name="frozen_pill">Held — touch to explore</string>
+    <string name="hint_headphones">Headphones make the separation much clearer</string>
+
+    <!-- Ways-to-listen hints: truth copy, chosen by what you point at -->
+    <string name="mode_hint_halves">Splits the scene down the middle — two tracks, nothing to tap. Best with players either side of frame.</string>
+    <string name="mode_hint_touch">Hear any point you pick and the sources it finds. Best with one or two instruments in frame.</string>
+    <string name="mode_hint_speech">Separates the person on screen from everything off screen. Best for speech.</string>
+
+    <!-- Source chips (colour is identity; never instrument names) -->
+    <string name="cd_source_chip">%1$s source, energy %2$d percent. Double-tap to hear it alone.</string>
+    <string name="cd_source_chip_soloed">%1$s source, playing alone. Double-tap to hear everything.</string>
+    <string name="color_blue">Blue</string>
+    <string name="color_sand">Sand</string>
+    <string name="color_purple">Purple</string>
+    <string name="sources_empty">Sources appear here as they are heard</string>
 
     <!-- States. Errors say what happened and what to do next. -->
     <string name="state_ready">Point the camera at the sound, then start listening</string>
