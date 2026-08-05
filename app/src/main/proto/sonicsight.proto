@@ -159,9 +159,13 @@ message StreamChunk {
   // Ask the server to compute/refresh source clusters for the window.
   bool request_clusters = 11;
 
-  // Pin the newest completed window: it becomes exempt from cache eviction
-  // so queries carrying its window_id keep answering while the user
-  // explores a frozen scene. The server keeps advancing windows normally.
+  // Freeze is LEVEL-triggered: hold true on every chunk while the user is
+  // exploring a frozen scene, false to release. On the rising edge the
+  // server pins its newest completed window (exempt from cache eviction;
+  // windows keep advancing normally), and WHILE FROZEN a PixelQuery with
+  // window_id = 0 resolves to the pinned window — the client never needs to
+  // learn the server's window id to query the frozen scene. Query results
+  // carry sequence_number = 0 so they stay outside audio gap detection.
   bool freeze = 12;
 }
 
