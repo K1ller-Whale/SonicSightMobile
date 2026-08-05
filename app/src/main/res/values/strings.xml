@@ -15,6 +15,16 @@
     <!-- Model names: what you point the camera at, never architecture names -->
     <string name="model_music">Music &amp; instruments</string>
     <string name="model_speech">Speech</string>
+    <string name="model_touch">Touch</string>
+
+    <!-- Touch mode -->
+    <string name="freeze">Freeze</string>
+    <string name="unfreeze">Unfreeze</string>
+    <string name="cd_freeze">Freeze the scene to explore it</string>
+    <string name="cd_touch_surface">Sound map. Touch anywhere to hear that part of the scene.</string>
+    <string name="query_playing">Playing the sound from where you touched</string>
+    <string name="query_nothing_here">No sound detected here</string>
+    <string name="query_error">Touch again — %1$s</string>
 
     <!-- States. Errors say what happened and what to do next. -->
     <string name="state_ready">Point the camera at the sound, then start listening</string>

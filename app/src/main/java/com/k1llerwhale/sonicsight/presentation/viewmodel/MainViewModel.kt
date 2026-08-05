@@ -69,6 +69,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _noLocalization = MutableLiveData(false)
     val noLocalization: LiveData<Boolean> = _noLocalization
 
+    // ── Touch (pixel) mode ──
+    /** Region audio answered by the server for a tap. */
+    data class QueryAudio(val queryId: Int, val pcm: ByteArray, val energy: Float, val error: String)
+
+    val queryAudio = MutableSharedFlow<QueryAudio>(replay = 0, extraBufferCapacity = 64)
+
+    /** Grid dimensions from the latest result — never hard-coded. */
+    @Volatile
+    var gridDims: Pair<Int, Int> = 14 to 14
+        private set
+
+    /** True once at least one pixel overlay was rendered this stream —
+     *  lets a pre-first-result freeze still show the first map instead of
+     *  wedging the UI in 'buffering' (review finding). */
+    @Volatile
+    private var hasPixelOverlay = false
+
+    /** Freeze is level-triggered on the wire: the activity stamps this onto
+     *  every outgoing frame chunk. While frozen the overlay is pinned
+     *  client-side and window_id=0 queries resolve to the pinned window. */
+    @Volatile
+    var frozen: Boolean = false
+        private set
+
+    private val _frozenLive = MutableLiveData(false)
+    val frozenLive: LiveData<Boolean> = _frozenLive
+
+    private var nextQueryId = 1
+
+    fun setFrozen(value: Boolean) {
+        frozen = value
+        _frozenLive.value = value
+    }
+
+    /** Send a tap/drag query. Suspending emit — a query must never be
+     *  silently dropped by a saturated out-queue. */
+    fun sendPixelQuery(xNorm: Float, yNorm: Float, radiusNorm: Float) {
+        val q = com.k1llerwhale.sonicsight.grpc.PixelQuery.newBuilder()
+            .setQueryId(nextQueryId++)
+            .setXNorm(xNorm)
+            .setYNorm(yNorm)
+            .setRadiusNorm(radiusNorm)
+            .setWindowId(0)  // newest; server redirects to the pinned window while frozen
+            .build()
+        val chunk = StreamChunk.newBuilder()
+            .addQueries(q)
+            .setFreeze(frozen)
+            .setRequestClusters(true)
+            .build()
+        viewModelScope.launch { outStreamChunks.emit(chunk) }
+    }
+
     // Live results for UI overlay
     private val _streamResults = MutableLiveData<Bitmap>()
     val streamResults: LiveData<Bitmap> = _streamResults
@@ -110,6 +162,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stopStreaming()
         _uiState.value = UiState.Streaming
         _noLocalization.value = false
+        setFrozen(false)  // a freeze armed while idle must not wedge the stream
+        hasPixelOverlay = false
         lastSeqNumber = -1
         lastResultTimeMs = 0L
 
@@ -213,6 +267,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (response.leftAudioPcm.size() > 0) {
             leftAudioChunks.emit(response.leftAudioPcm.toByteArray())
             rightAudioChunks.emit(response.rightAudioPcm.toByteArray())
+        }
+
+        // ── Touch (pixel) mode: energy map + query answers, no legacy heatmaps ──
+        val activeProfile = _currentProfile.value ?: ModelProfile.DEFAULT
+        if (activeProfile.isPixel) {
+            for (pa in response.pixelAudioList) {
+                queryAudio.tryEmit(
+                    QueryAudio(pa.queryId, pa.pcm.toByteArray(), pa.energy, pa.error)
+                )
+            }
+            // Frozen pins the DISPLAYED overlay — but the very first map of a
+            // stream still renders, or freezing early wedges 'buffering'.
+            if (response.energyMap.size() > 0 && (!frozen || !hasPixelOverlay)) {
+                if (response.gridWidth > 0 && response.gridHeight > 0) {
+                    gridDims = response.gridWidth to response.gridHeight
+                }
+                withContext(Dispatchers.IO) {
+                    val colors = response.clustersList.associate { it.clusterId to it.rgb }
+                    val overlay = maskProcessor.createPixelOverlay(
+                        response.energyMap.toByteArray(),
+                        response.gridWidth,
+                        response.gridHeight,
+                        if (response.clusterLabels.size() > 0) response.clusterLabels.toByteArray() else null,
+                        colors,
+                    )
+                    if (overlay != null) {
+                        hasPixelOverlay = true
+                        withContext(Dispatchers.Main) { _streamResults.value = overlay }
+                    }
+                }
+            }
+            return
         }
 
         // Render visual heatmaps using LOCAL cached frame (transparent overlay)
@@ -340,6 +426,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stopStreaming()
         _uiState.value = UiState.Idle
         _noLocalization.value = false
+        setFrozen(false)
         lastSeqNumber = -1
         lastResultTimeMs = 0L
     }

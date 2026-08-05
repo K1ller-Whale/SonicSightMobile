@@ -146,6 +146,65 @@ class MaskProcessor {
         }
     }
 
+    /**
+     * Touch-mode overlay: the energy map at the model's NATIVE grid with
+     * EXPLICIT dimensions from the wire (never inferred, never assumed
+     * square), optionally tinted by cluster identity.
+     *
+     * Energy rides the magma ramp with the same gamma-alpha rule as the
+     * heatmaps; cells belonging to a discovered source are blended toward
+     * that source's wire-provided colour (colour = identity, energy =
+     * brightness/opacity — the two data sets never both own colour).
+     * labelBytes uses 255 = silence.
+     */
+    fun createPixelOverlay(
+        energyBytes: ByteArray,
+        gridWidth: Int,
+        gridHeight: Int,
+        labelBytes: ByteArray? = null,
+        clusterColors: Map<Int, Int> = emptyMap(),
+    ): Bitmap? {
+        if (gridWidth <= 0 || gridHeight <= 0) return null
+        val cellCount = gridWidth * gridHeight
+        if (energyBytes.size < cellCount) return null
+        try {
+            val bitmap = Bitmap.createBitmap(gridWidth, gridHeight, Bitmap.Config.ARGB_8888)
+            val pixels = IntArray(cellCount)
+            val hasLabels = labelBytes != null && labelBytes.size >= cellCount
+            for (i in 0 until cellCount) {
+                val v = ((energyBytes[i].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
+                val alpha = (v.toDouble().pow(2.5) * 200.0).toInt().coerceIn(0, 200)
+                var rgb = heatColor(v) and 0x00FFFFFF
+                if (hasLabels) {
+                    val label = labelBytes!![i].toInt() and 0xFF
+                    val tint = if (label != 255) clusterColors[label] else null
+                    if (tint != null) {
+                        rgb = blendRgb(rgb, tint and 0x00FFFFFF, 0.55f)
+                    }
+                }
+                pixels[i] = (alpha shl 24) or rgb
+            }
+            bitmap.setPixels(pixels, 0, gridWidth, 0, 0, gridWidth, gridHeight)
+            // Scale to a texture size the hardware layer maps cleanly; aspect
+            // is preserved by the ImageView matrix, not here.
+            val scaled = Bitmap.createScaledBitmap(bitmap, gridWidth * 24, gridHeight * 24, true)
+            bitmap.recycle()
+            return scaled
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
+        }
+    }
+
+    private fun blendRgb(a: Int, b: Int, t: Float): Int {
+        val ar = (a shr 16) and 0xFF; val ag = (a shr 8) and 0xFF; val ab = a and 0xFF
+        val br = (b shr 16) and 0xFF; val bg = (b shr 8) and 0xFF; val bb = b and 0xFF
+        val r = (ar + (br - ar) * t).toInt()
+        val g = (ag + (bg - ag) * t).toInt()
+        val bl = (ab + (bb - ab) * t).toInt()
+        return (r shl 16) or (g shl 8) or bl
+    }
+
     // Heatmap colours come from the magma spectrogram palette: perceptually
     // uniform, monotonic in lightness (so the scale survives red-green
     // colour-vision deficiencies), dark at the quiet end so it vanishes

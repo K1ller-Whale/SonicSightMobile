@@ -74,6 +74,11 @@ class MainActivity : AppCompatActivity() {
     private var recordingStartTime = 0L
     private var hasFirstResult = false
 
+    // Camera frame dimensions as delivered to the transform (post-rotation);
+    // the touch coordinate chain needs the real numbers, not assumptions.
+    @Volatile private var lastFrameW = 0
+    @Volatile private var lastFrameH = 0
+
     // Audio variables
     private var audioRecord: AudioRecord? = null
     private var micDumper: RawAudioDumper? = null
@@ -134,18 +139,36 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnSettings.setOnClickListener { showHostDialog() }
 
-        binding.modelGroup.check(
-            if (profile.id == ModelProfile.MULTISENSORY.id) binding.btnModelSpeech.id
-            else binding.btnModelMusic.id
-        )
+        binding.modelGroup.check(modelButtonIdFor(profile))
         binding.modelGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
             if (!isChecked) return@addOnButtonCheckedListener
-            val target = if (checkedId == binding.btnModelSpeech.id) {
-                ModelProfile.MULTISENSORY
-            } else {
-                ModelProfile.SONICSIGHT
+            val target = when (checkedId) {
+                binding.btnModelSpeech.id -> ModelProfile.MULTISENSORY
+                binding.btnModelTouch.id -> ModelProfile.SONICSIGHT_PIXEL
+                else -> ModelProfile.SONICSIGHT
             }
             if (target.id != profile.id) switchModel(target)
+        }
+
+        binding.btnFreeze.setOnClickListener {
+            val next = !viewModel.frozen
+            viewModel.setFrozen(next)
+            binding.btnFreeze.text =
+                getString(if (next) R.string.unfreeze else R.string.freeze)
+        }
+
+        setupPixelTouch()
+        collectQueryAudio()
+
+        // Re-register the overlay matrix on any layout change (multi-window
+        // resize, fold posture) — a result-time-only matrix goes stale,
+        // especially while frozen (review finding).
+        binding.ivHeatmapOverlay.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or_, ob ->
+            if (profile.isPixel && (r - l != or_ - ol || b - t != ob - ot) &&
+                lastPixelBmpW > 0
+            ) {
+                applyPixelOverlayMatrix(lastPixelBmpW, lastPixelBmpH)
+            }
         }
 
         binding.soloGroup.check(binding.btnSoloBoth.id)
@@ -178,6 +201,158 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Register the letterbox-space energy bitmap onto the fillCenter camera
+     * preview: bitmap px -> letterbox px -> frame px (inverse of
+     * letterboxAndCompress) -> view px (forward fillCenter). One affine
+     * transform; without it the overlay would stretch the grey letterbox
+     * rows across the visible frame and every cell would sit off its scene
+     * content.
+     */
+    private var lastPixelBmpW = 0
+    private var lastPixelBmpH = 0
+
+    private fun applyPixelOverlayMatrix(bmpW: Int, bmpH: Int) {
+        lastPixelBmpW = bmpW
+        lastPixelBmpH = bmpH
+        val fw = lastFrameW.toFloat(); val fh = lastFrameH.toFloat()
+        val vw = binding.ivHeatmapOverlay.width.toFloat()
+        val vh = binding.ivHeatmapOverlay.height.toFloat()
+        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0 || bmpW <= 0 || bmpH <= 0) return
+        val dim = 224f
+        val s1 = dim / maxOf(fw, fh)               // frame -> letterbox scale
+        val lbOffX = (dim - fw * s1) / 2f
+        val lbOffY = (dim - fh * s1) / 2f
+        val s2 = maxOf(vw / fw, vh / fh)           // frame -> view (fillCenter)
+        val vOffX = (vw - fw * s2) / 2f
+        val vOffY = (vh - fh * s2) / 2f
+        // Per-axis bitmap -> letterbox scale: the map covers the full square,
+        // and the axes only match while the wire grid is square.
+        val sx = (dim / bmpW) / s1 * s2
+        val sy = (dim / bmpH) / s1 * s2
+        val m = Matrix()
+        m.setScale(sx, sy)
+        m.postTranslate(-lbOffX / s1 * s2 + vOffX, -lbOffY / s1 * s2 + vOffY)
+        binding.ivHeatmapOverlay.imageMatrix = m
+    }
+
+    private fun modelButtonIdFor(p: ModelProfile) = when (p.id) {
+        ModelProfile.MULTISENSORY.id -> binding.btnModelSpeech.id
+        ModelProfile.SONICSIGHT_PIXEL.id -> binding.btnModelTouch.id
+        else -> binding.btnModelMusic.id
+    }
+
+    /** Touch-to-query: the tested coordinate chain (view -> fillCenter
+     *  inverse -> letterbox norm), one query per tap or per grid cell
+     *  crossed in a drag. */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupPixelTouch() {
+        var lastCell: Pair<Int, Int>? = null
+        binding.ivHeatmapOverlay.setOnTouchListener { view, event ->
+            if (!profile.isPixel || !isRecording) return@setOnTouchListener false
+            val fw = lastFrameW; val fh = lastFrameH
+            if (fw <= 0 || fh <= 0) return@setOnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                    val n = com.k1llerwhale.sonicsight.util.CoordinateMap.viewToQueryNorm(
+                        event.x, event.y,
+                        view.width.toFloat(), view.height.toFloat(),
+                        fw.toFloat(), fh.toFloat(),
+                    ) ?: return@setOnTouchListener true
+                    val g = viewModel.gridDims
+                    val cell = com.k1llerwhale.sonicsight.util.CoordinateMap.normToCell(
+                        n.x, n.y, g.first, g.second
+                    )
+                    // One query per tap (DOWN) or per grid cell crossed in a
+                    // drag — never one per touch event, and never a duplicate
+                    // on finger-up (review finding: DOWN+UP double-queried).
+                    if (cell != lastCell) {
+                        lastCell = cell
+                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        // Fingertip-sized neighbourhood, honest about the
+                        // grid: radius ~1 cell.
+                        viewModel.sendPixelQuery(n.x, n.y, 1.0f / g.first)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    lastCell = null
+                    view.performClick()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    /** Play a query's region audio once, ducking the mixture underneath. */
+    private fun collectQueryAudio() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            viewModel.queryAudio.collect { qa ->
+                if (qa.error.isNotEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        binding.tvStatus.text = getString(R.string.query_error, qa.error)
+                    }
+                    return@collect
+                }
+                if (qa.pcm.isEmpty()) return@collect
+                withContext(Dispatchers.Main) {
+                    binding.tvStatus.text =
+                        if (qa.energy < QUERY_SILENCE_ENERGY) getString(R.string.query_nothing_here)
+                        else getString(R.string.query_playing)
+                }
+                if (qa.energy < QUERY_SILENCE_ENERGY) return@collect
+                playQueryPcm(qa.pcm)
+            }
+        }
+    }
+
+    private var queryTrack: AudioTrack? = null
+    private var duckGeneration = 0
+
+    private fun playQueryPcm(pcm: ByteArray) {
+        try {
+            queryTrack?.release()
+            val rate = profile.streamRate
+            val track = AudioTrack(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build(),
+                AudioFormat.Builder()
+                    .setSampleRate(rate)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build(),
+                pcm.size, AudioTrack.MODE_STATIC,
+                AudioManager.AUDIO_SESSION_ID_GENERATE,
+            )
+            track.write(pcm, 0, pcm.size)
+            queryTrack = track
+            // Duck the live mixture while the region plays. The restore is
+            // generation-tagged: a newer query's duck must not be undone by
+            // an older query's timer firing mid-playback (review finding).
+            val generation = ++duckGeneration
+            audioTrackLeft?.setVolume(0.15f)
+            track.play()
+            val durationMs = pcm.size / 2 * 1000L / rate
+            binding.btnRecord.postDelayed({
+                if (generation == duckGeneration) {
+                    audioTrackLeft?.setVolume(1.0f)
+                }
+            }, durationMs + 100)
+        } catch (e: Exception) {
+            Log.e("SonicSight", "query playback failed: ${e.message}")
+        }
+    }
+
+    private fun releaseQueryTrack() {
+        // Stop region audio with the session — Stop must actually stop
+        // (review finding: the static track outlived the stream).
+        duckGeneration++
+        try { queryTrack?.stop() } catch (_: Exception) {}
+        queryTrack?.release()
+        queryTrack = null
+    }
+
     /** True when the system requests no/short animations. */
     private fun reducedMotion(): Boolean =
         android.provider.Settings.Global.getFloat(
@@ -206,6 +381,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun cleanupAudioPlayback() {
+        releaseQueryTrack()
         playbackJobLeft?.cancel()
         playbackJobRight?.cancel()
         playbackJobLeft = null
@@ -336,6 +512,44 @@ class MainActivity : AppCompatActivity() {
     // the one control for this on both models, labelled from the profile.
 
     private fun observeUiState() {
+        // Registered FIRST: LiveData redelivers sticky values in registration
+        // order, and a retained pixel overlay must not render before the
+        // profile (scale type, matrix mode) is in place after recreation.
+        viewModel.currentProfile.observe(this) { p ->
+            profile = p
+            // Stream labels and legend meaning come from the profile:
+            // Left/Right + Loud/Quiet for music, On-screen/Off-screen +
+            // Matches audio/No match for speech. Never hard-coded.
+            binding.btnSoloFirst.text = p.streamLabels.first
+            binding.btnSoloSecond.text = p.streamLabels.second
+            binding.tvLegendHigh.text = p.heatmapMeaning.first
+            binding.tvLegendLow.text = p.heatmapMeaning.second
+            val modelButtonId = modelButtonIdFor(p)
+            if (binding.modelGroup.checkedButtonId != modelButtonId) {
+                binding.modelGroup.check(modelButtonId)
+            }
+            // Touch mode: solo chips make no sense (mixture + tap queries);
+            // freeze becomes available; the overlay switches from the fitXY
+            // stretch to a computed matrix that registers the letterboxed
+            // energy map onto the fillCenter camera preview.
+            binding.soloGroup.visibility = if (p.isPixel) View.GONE else View.VISIBLE
+            binding.btnFreeze.visibility = if (p.isPixel) View.VISIBLE else View.GONE
+            binding.btnFreeze.isEnabled = isRecording
+            binding.ivHeatmapOverlay.scaleType =
+                if (p.isPixel) android.widget.ImageView.ScaleType.MATRIX
+                else android.widget.ImageView.ScaleType.FIT_XY
+            // In touch mode the overlay is the input surface, not decoration:
+            // it must be reachable by accessibility services. (Full TalkBack
+            // explore-by-touch UX is Phase 6 design work; this makes the
+            // surface exist for it.)
+            binding.ivHeatmapOverlay.importantForAccessibility =
+                if (p.isPixel) View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                else View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            binding.ivHeatmapOverlay.contentDescription =
+                if (p.isPixel) getString(R.string.cd_touch_surface) else getString(R.string.cd_viewfinder)
+            binding.ivHeatmapOverlay.isClickable = p.isPixel
+        }
+
         viewModel.uiState.observe(this) { state ->
             when(state) {
                 is UiState.Idle -> {
@@ -346,9 +560,11 @@ class MainActivity : AppCompatActivity() {
                     binding.ivHeatmapOverlay.visibility = View.GONE
                     binding.tvGate.visibility = View.GONE
                     binding.modelGroup.isEnabled = true
+                    binding.btnFreeze.isEnabled = false  // nothing to pin while idle
                 }
                 is UiState.Streaming -> {
                     binding.btnRecord.isEnabled = true
+                    binding.btnFreeze.isEnabled = true
                     binding.btnRecord.text = getString(R.string.stop_listening)
                     binding.tvStatus.text = getString(
                         R.string.state_buffering,
@@ -373,6 +589,7 @@ class MainActivity : AppCompatActivity() {
             // draw pipeline, causing 'Canvas: trying to use a recycled bitmap' crashes.
             // The GC will reclaim it once the ImageView releases its reference.
             binding.ivHeatmapOverlay.setImageBitmap(bitmap)
+            if (profile.isPixel) applyPixelOverlayMatrix(bitmap.width, bitmap.height)
             binding.tvGate.visibility = View.GONE
             if (!hasFirstResult) {
                 // The one orchestrated moment: the veil arrives.
@@ -399,21 +616,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        viewModel.currentProfile.observe(this) { p ->
-            profile = p
-            // Stream labels and legend meaning come from the profile:
-            // Left/Right + Loud/Quiet for music, On-screen/Off-screen +
-            // Matches audio/No match for speech. Never hard-coded.
-            binding.btnSoloFirst.text = p.streamLabels.first
-            binding.btnSoloSecond.text = p.streamLabels.second
-            binding.tvLegendHigh.text = p.heatmapMeaning.first
-            binding.tvLegendLow.text = p.heatmapMeaning.second
-            val modelButtonId =
-                if (p.id == ModelProfile.MULTISENSORY.id) binding.btnModelSpeech.id
-                else binding.btnModelMusic.id
-            if (binding.modelGroup.checkedButtonId != modelButtonId) {
-                binding.modelGroup.check(modelButtonId)
-            }
+        viewModel.frozenLive.observe(this) { f ->
+            binding.btnFreeze.text = getString(if (f) R.string.unfreeze else R.string.freeze)
         }
 
         viewModel.noLocalization.observe(this) { gated ->
@@ -571,6 +775,8 @@ class MainActivity : AppCompatActivity() {
         }
         
         val prepStart = System.currentTimeMillis()
+        lastFrameW = bitmap.width
+        lastFrameH = bitmap.height
 
         // 3. Prepare frame(s) per the model profile and compress
         val chunk: StreamChunk = if (profile.frameKind == FrameKind.FULL_LETTERBOXED) {
@@ -580,6 +786,10 @@ class MainActivity : AppCompatActivity() {
                 .setFullJpeg(ByteString.copyFrom(fullJpeg))
                 .setFrameWidth(224)
                 .setFrameHeight(224)
+                // Touch-mode level flags ride the 8 fps frame chunks —
+                // well inside the server's ~1 s request_clusters latch.
+                .setFreeze(profile.isPixel && viewModel.frozen)
+                .setRequestClusters(profile.isPixel)
                 .build()
         } else {
             // Split, Resize, Crop and Compress exactly like the Python backend did
@@ -718,7 +928,10 @@ class MainActivity : AppCompatActivity() {
             null
         }
 
-        val isHiRate = profile.frameKind == FrameKind.FULL_LETTERBOXED
+        // Which proto field carries the audio is a question of RATE, not frame
+        // kind: touch mode sends full frames but 11025 Hz audio_pcm, only the
+        // 22050 Hz multisensory branch uses audio_pcm_hi.
+        val isHiRate = profile.streamRate > 11025
         audioJob = lifecycleScope.launch(Dispatchers.IO) {
             val decimator = AudioDecimator(
                 decimFactor, 121, profile.decimCutoffHz, CAPTURE_RATE.toDouble()
@@ -744,6 +957,14 @@ class MainActivity : AppCompatActivity() {
                             val pcm = ByteString.copyFrom(outBuffer, 0, outBytes)
                             val builder = StreamChunk.newBuilder().setTimestampMs(timestampMs)
                             if (isHiRate) builder.setAudioPcmHi(pcm) else builder.setAudioPcm(pcm)
+                            if (profile.isPixel) {
+                                // Level flags on AUDIO chunks too: the proto
+                                // asks for the flag on every chunk, and audio
+                                // chunks outnumber frames (review finding —
+                                // without this the server's freeze flapped).
+                                builder.setFreeze(viewModel.frozen)
+                                builder.setRequestClusters(true)
+                            }
 
                             // Lossless, suspending: audio chunks must never be
                             // dropped by a saturated out-queue (frames may).
@@ -828,5 +1049,11 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
         ).toTypedArray()
+
+        // Below this fraction of the window's mixture energy, the honest
+        // answer is "no sound detected here". The wire value is RELATIVE
+        // (0..1), so this is scale-free; still provisional until measured
+        // on real scenes (C2 spirit).
+        private const val QUERY_SILENCE_ENERGY = 0.02f
     }
 }
