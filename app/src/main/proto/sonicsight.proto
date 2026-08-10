@@ -197,8 +197,10 @@ message StreamResult {
 
   // Separated audio chunk corresponding to this timestep (raw PCM bytes,
   // 16-bit signed, mono). Sample rate depends on the model: 11025 Hz on the
-  // "sonicsight" branch, 21000 Hz on the "multisensory" branch. The client
-  // configures playback from its model profile.
+  // "sonicsight" branch, 22050 Hz on the "multisensory" branch (the engine
+  // converts its internal 21000 Hz back to the wire rate; the registry's
+  // output_sample_rate is authoritative). The client configures playback
+  // from its model profile.
   // This will be a small chunk (e.g., 0.1s to 0.5s of audio) to be played immediately
   bytes left_audio_pcm = 4;
   bytes right_audio_pcm = 5;
