@@ -76,7 +76,7 @@ SonicSightMobile/
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/K1ller-Whale/SonicSightMobile.git
    cd SonicSightV1/SonicSightMobile
    ```
 
@@ -105,5 +105,3 @@ The app relies heavily on `.proto` contracts (`sonicsight.proto`) to serialize a
   every `StreamResult.model_id`. See `SonicSightBackend/MODELS.md` for how to add
   a model end to end, and `SonicSightBackend/TESTPLAN.md` for the validation plan.
 
-## 🛡️ License
-Distribute your license here. All rights reserved by the original project contributors.
