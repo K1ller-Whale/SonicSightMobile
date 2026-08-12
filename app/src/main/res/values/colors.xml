@@ -13,6 +13,16 @@
     <color name="scrim_soft">#660A0511</color>
     <color name="chalk_dim">#99F4F2EF</color>
 
+    <!-- Brand identity (assets/README.md). Distinct from the runtime palette
+         above on purpose: the magma ramp is the instrument, these four are the
+         mark — icon, splash, and anywhere the logo is drawn. Cyan and amber
+         differ in lightness as well as hue; do not swap them for two hues of
+         similar value, and do not recolour the arcs to one hue. -->
+    <color name="brand_navy">#0F1B33</color>   <!-- icon field, wordmark -->
+    <color name="brand_ink">#EEF4F8</color>    <!-- eye and pupil on navy -->
+    <color name="brand_cyan">#3ED0BE</color>   <!-- track A, left arcs -->
+    <color name="brand_amber">#FFB454</color>  <!-- track B, right arcs -->
+
     <!-- legacy names kept for generated references -->
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>

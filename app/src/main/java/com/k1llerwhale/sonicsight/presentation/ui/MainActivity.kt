@@ -37,6 +37,7 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.google.protobuf.ByteString
 import com.k1llerwhale.sonicsight.R
 import com.k1llerwhale.sonicsight.data.api.GrpcModule
@@ -112,6 +113,9 @@ class MainActivity : AppCompatActivity() {
     private var currentPlaybackMode: PlaybackMode = PlaybackMode.BOTH
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Must run before super.onCreate(): it draws the launch theme's mark and
+        // then swaps this activity to postSplashScreenTheme (Theme.SonicSight).
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
