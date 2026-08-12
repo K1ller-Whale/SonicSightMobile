@@ -20,6 +20,7 @@
         <activity
             android:name=".presentation.ui.MainActivity"
             android:exported="true"
+            android:theme="@style/Theme.SonicSight.Splash"
             android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
             <intent-filter>

@@ -1,12 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  SonicSight mark — converted from assets/ic_launcher_foreground.svg.
-  A lens-shaped eye with a central pupil; two cyan arcs left, two amber arcs
-  right: one mixed field separated into two localized tracks.
-
-  The mark sits in a 66dp box centred in the 108dp viewport, inside the 72dp
-  safe zone, so no launcher mask (circle, squircle, teardrop) clips it.
-  Geometry lives in a 0-100 local box — see assets/gen_logo.py.
+  Splash mark. Same geometry as the launcher foreground, drawn a little larger
+  (0.76 vs 0.66) because Android 12+ scales this into a 240dp circle whose
+  intended content area is the inner 160dp — 0.66 would read as undersized.
+  Still well inside the mask: the mark's box is 68x56dp of the 108dp viewport.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -14,12 +11,11 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:translateX="21"
-        android:translateY="21"
-        android:scaleX="0.66"
-        android:scaleY="0.66">
+        android:translateX="16"
+        android:translateY="16"
+        android:scaleX="0.76"
+        android:scaleY="0.76">
 
-        <!-- eye -->
         <path
             android:pathData="M8,50C8,50 26,16 50,16C74,16 92,50 92,50C92,50 74,84 50,84C26,84 8,50 8,50Z"
             android:fillColor="#00000000"
@@ -27,7 +23,6 @@
             android:strokeWidth="5.5"
             android:strokeLineJoin="round" />
 
-        <!-- track A: left arcs -->
         <path
             android:pathData="M31.98,62.62A22,22 0 0 0 31.98,37.38"
             android:fillColor="#00000000"
@@ -40,8 +35,6 @@
             android:strokeColor="@color/brand_cyan"
             android:strokeWidth="5.5"
             android:strokeLineCap="round" />
-
-        <!-- track B: right arcs -->
         <path
             android:pathData="M68.02,37.38A22,22 0 0 1 68.02,62.62"
             android:fillColor="#00000000"
@@ -55,7 +48,6 @@
             android:strokeWidth="5.5"
             android:strokeLineCap="round" />
 
-        <!-- pupil: doubles as the localization point the heatmap marks -->
         <path
             android:pathData="M50,50m-9.5,0a9.5,9.5 0 1,0 19,0a9.5,9.5 0 1,0 -19,0"
             android:fillColor="@color/brand_ink" />
