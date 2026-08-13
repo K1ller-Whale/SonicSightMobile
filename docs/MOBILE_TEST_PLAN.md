@@ -219,7 +219,23 @@ fake camera and microphone. Tier 2 (MI-DEV) is the only capture-proving tier.
 
 ---
 
+## Implementation status (updated 2026-08-14)
+
+Implemented and green: all matrix rows except the following, each stated
+per the discipline rather than left implied:
+
+| Id | Status | Reason |
+|---|---|---|
+| MU-402 (cap effect) | NOT IMPLEMENTED at unit level | in-process transport skips serialization — no size enforcement off-device; configured value pinned in MU-401 (dated method correction in YAML) |
+| MU-407 (audio parking) | partial | lossless-in-order + non-suspending-frame-path verified; parking-under-saturation not measurable in-process (no flow control) |
+| MU-503 (270°) | partial | 0/90/180 through the real chain; Robolectric Canvas/Matrix no-op forced test-side pixel-loop rotation |
+| MU-508 (stride matrix) | NOT IMPLEMENTED at unit level | Robolectric `YuvImage` placeholder — 3 tests `@Ignore`d with cause; moved to MI-DEV-002 whose oracle (stride-aware reference converter) ships in both test tiers |
+| MU-605 (freeze stamping on frame/audio chunks) | partial | ViewModel query half verified; capture-path stamping is Activity code — runbook E9 |
+| MU-705 / MU-706 (FR-006 / FR-P02 pins) | NOT IMPLEMENTED at unit level | MainActivity's onCreate binds CameraX `ProcessCameraProvider`, unavailable under Robolectric — runbook E10/E11 |
+| MI-DEV-002 / MI-DEV-003 | implemented, NOT RUN | compile green; no device attached in the authoring session |
+
 ## Results
 
-None yet. No test has produced a number as of this document's date. First
-results appear in `MOBILE_TEST_REPORT.md` with conditions attached.
+In `MOBILE_TEST_REPORT.md` (results with the four status labels, run
+conditions, observed values, coverage, and the flaky-test incident
+ledger). This document stays results-free by design.
