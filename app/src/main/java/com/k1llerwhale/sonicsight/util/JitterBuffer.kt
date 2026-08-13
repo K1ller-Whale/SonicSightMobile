@@ -2,6 +2,7 @@ package com.k1llerwhale.sonicsight.util
 
 import android.media.AudioTrack
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -18,17 +19,25 @@ import kotlin.concurrent.withLock
  * 4. **Inserts silence** when the buffer runs dry, preventing AudioTrack underrun clicks.
  * 5. **Adapts** the initial buffer target upward when underruns are detected.
  *
- * @param audioTrack    The AudioTrack to feed. Must be in INITIALIZED state; this class calls play().
+ * @param sink          The PCM sink to feed (production: [AudioTrackSink]). Must be ready; this class calls play().
  * @param sampleRate    Audio sample rate in Hz (11025).
  * @param initialBufferMs  Minimum ms of audio to buffer before starting playback (default 200ms).
  * @param maxBufferMs   Maximum ms of audio the ring buffer can hold (default 1500ms).
  */
 class JitterBuffer(
-    private val audioTrack: AudioTrack,
+    private val sink: PcmSink,
     private val sampleRate: Int = 11025,
     private var initialBufferMs: Int = 200,
     private val maxBufferMs: Int = 1500
 ) {
+
+    /** Production constructor — unchanged signature (test seam S1, docs/SEAMS.md). */
+    constructor(
+        audioTrack: AudioTrack,
+        sampleRate: Int = 11025,
+        initialBufferMs: Int = 200,
+        maxBufferMs: Int = 1500,
+    ) : this(AudioTrackSink(audioTrack), sampleRate, initialBufferMs, maxBufferMs)
     companion object {
         private const val TAG = "JitterBuffer"
         // PCM16 mono: 2 bytes per sample
@@ -58,6 +67,14 @@ class JitterBuffer(
     // Adaptive metrics
     private var underrunCount = 0
     private var totalDrainCycles = 0L
+
+    /** Observed underruns since start(). Test seam S1: read-only observer. */
+    @get:VisibleForTesting
+    internal val underruns: Int get() = underrunCount
+
+    /** Current (possibly adapted) prebuffer target. Test seam S1: read-only observer. */
+    @get:VisibleForTesting
+    internal val effectiveInitialBufferMs: Int get() = initialBufferMs
 
     // The drain write size: how many bytes to write per AudioTrack.write() call.
     // We use a small chunk (~23ms = 256 samples = 512 bytes) for responsive draining.
@@ -185,8 +202,8 @@ class JitterBuffer(
 
         // Start playback
         try {
-            if (audioTrack.state == AudioTrack.STATE_INITIALIZED) {
-                audioTrack.play()
+            if (sink.isReady) {
+                sink.play()
                 playbackStarted.set(true)
                 Log.i(TAG, "Playback started after buffering ${bufferLevelMs()}ms")
             }
@@ -256,12 +273,10 @@ class JitterBuffer(
 
     private fun writeToTrack(data: ByteArray, size: Int) {
         try {
-            val track = audioTrack
-            if (track.state == AudioTrack.STATE_INITIALIZED &&
-                track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+            if (sink.isReady && sink.isPlaying) {
                 // AudioTrack.write() blocks until the data is consumed, which naturally
                 // paces the drain loop to real-time playback speed.
-                track.write(data, 0, size)
+                sink.write(data, 0, size)
             }
         } catch (e: Exception) {
             Log.e(TAG, "AudioTrack write error: ${e.message}")

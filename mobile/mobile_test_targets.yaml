@@ -1,0 +1,918 @@
+# ============================================================================
+# mobile_test_targets.yaml — SonicSightMobile verification targets
+# ============================================================================
+# Written BEFORE any measurement, per the project evidence discipline.
+# This file is the SINGLE SOURCE for gates (mirror of the backend's
+# nfr/nfr_targets.yaml convention). MOBILE_TEST_PLAN.md references ids here;
+# it never restates a gate value.
+#
+# Rules:
+#   1. Targets precede measurement and are never softened afterwards to make
+#      a result pass. Corrections are declared in `reconciliations:` with a
+#      reason — never silently edited.
+#   2. Result labels (used in MOBILE_TEST_REPORT.md, never here):
+#      implemented+verified | implemented | partial | not-met.
+#   3. What was not measured is stated as not measured. No estimated numbers.
+#   4. Every measured number carries its conditions (device, API level,
+#      build type, run count).
+#   5. A gate not derivable from the locked constants is written as
+#      `TBD-after-first-observation` and is declared (dated) when set.
+
+meta:
+  written: 2026-08-13
+  repo: SonicSightMobile
+  branch: test/mobile-suite
+  baseline_commit: c66cbf8  # was 56a02a5 before the 2026-08-13 history rewrite (commit-message cleanup; trees identical)
+  build_versions:
+    agp: 8.13.2
+    gradle: "8.13"
+    kotlin: 2.0.21
+    coroutines: 1.7.3
+    grpc: 1.62.2
+    grpc_kotlin: 1.4.1
+    protobuf: 3.25.3 (lite runtime)
+    minSdk: 28
+    targetSdk: 36
+    compileSdk: 36
+
+conditions:
+  jvm: &jvm >
+    JVM unit test (testDebugUnitTest), Windows 11 host, Gradle 8.13 /
+    AGP 8.13.2, JVM target 11. Deterministic: runTest +
+    StandardTestDispatcher virtual time, injected clocks, seeded RNG,
+    no real sockets (in-process gRPC), no Thread.sleep.
+  robolectric: &robo >
+    JVM unit test under Robolectric at a single SDK level (multi-API matrix
+    is DEFERRED — Robolectric here is a unit-test enabler for
+    android.graphics / lifecycle, not a device tier). SDK level recorded in
+    the report; must be within the installed Robolectric version's support
+    matrix.
+  device: &device >
+    Instrumented test on physically connected hardware. Device model, API
+    level, build type and run count recorded in the probe's JSON output and
+    in DEVICE_MATRIX.md. Devices not run are absent from the table, never
+    estimated.
+
+# ----------------------------------------------------------------------------
+# Reconciliations — declared 2026-08-13, before any measurement was taken.
+# Reason common to all: the original brief row was written from a compressed
+# project summary rather than from source. Source is authoritative.
+# ----------------------------------------------------------------------------
+reconciliations:
+  - id: REC-1
+    row: jitter-buffer
+    was: "prebuffer 1.5 s = 33075 B"
+    now: >
+      Two distinct gates. Capacity: maxBufferMs=1500 rate-scaled to bytes —
+      33075 B @ 11025 Hz, 66150 B @ 22050 Hz (JitterBuffer.kt:45). Prebuffer
+      (playback-start): initialBufferMs=200 ms, adaptive +50 ms per 3
+      consecutive underruns to a 500 ms ceiling (JitterBuffer.kt:29,37-41).
+      Independently verified 2026-08-13.
+  - id: REC-2
+    row: heatmap-overlay
+    was: "overlay 672x336 as integer x12 of 56"
+    now: >
+      Each heatmap is scaled to a HARD-CODED 336x336 target regardless of
+      inferred side (Bitmap.createScaledBitmap(bitmap, 336, 336, true),
+      MaskProcessor.kt:140 — "x6" is only the incidental ratio for the
+      56-side case). Halves (heatmapCount==2) stitches two into 672x336
+      (MainViewModel.kt:394-399). Speech (1 map) renders 336x336. Pixel
+      mode is the one true multiplier path: grid*24 = 336x336 for 14x14
+      (MaskProcessor.kt:190). "x12 of 56" framing dropped.
+  - id: REC-3
+    row: stale-proto-comment
+    was: "sonicsight.proto claims 21000 Hz for the speech wire"
+    now: >
+      Obsolete. Proto states 22050 Hz on the wire with 21000 Hz noted as the
+      engine's internal rate only (sonicsight.proto:158, 199-204). MU-802
+      still pins 22050; MU-801 pins the observed cross-repo SHA-256.
+  - id: REC-4
+    row: result-cadence
+    was: "client asserts halves 8 results/s, speech 4 results/s"
+    now: >
+      4/s (250 ms hop) is a SERVER cadence; no client constant exists. Client
+      sends 125 ms audio blocks on both profiles (streamRate/8 —
+      MainActivity.kt:982). Receive side assumes no cadence: 500 ms
+      degradation log + 1250-sample gap-fill fallback
+      (MainViewModel.kt:294,307). Send side tested as-is; receive side
+      characterized as-is.
+  - id: REC-5
+    row: viewmodel-state
+    was: "states idle/permissions/connecting/streaming/error/stopped;
+      SavedStateHandle persists server address; host:port validated"
+    now: >
+      Real state set: Idle/Processing/Uploading/Streaming/Error/
+      NavigationReady (MainViewModel.kt:25-36). Persistence is
+      SharedPreferences via GrpcModule, not SavedStateHandle. No server
+      address validation exists (MainActivity.kt:468-486) — recorded as a
+      product gap (see D-M ledger), not a contradiction: the report claims
+      only that the host is user-set and persisted.
+  - id: REC-6
+    row: FR-033
+    was: "mobile pins speech burst cap 0.75 s vs designed 1.5 s"
+    now: >
+      Reattributed to the backend, with an anchor: exhaustive mobile source
+      inspection + grep found no sample-valued burst cap client-side (the
+      mobile jitter buffer rate-scales capacity correctly at both wire
+      rates), and the constant was located server-side —
+      SAFE_DRAIN_SAMPLES = int(AUD_RATE * 1.5) = 16537 samples
+      (SonicSightBackend/src/grpc_server.py:354, config.py:14 AUD_RATE =
+      11025), fixed across branches, = 0.75 s at the 22050 Hz speech
+      output. Removed from the mobile pinning set entirely; recorded as
+      D-M-1 in docs/MOBILE_DEFECTS.md.
+
+removed:
+  - id: FR-033-pin
+    reason: see REC-6. No test, no @Ignore'd intent test, nothing in app/src/test.
+
+# ----------------------------------------------------------------------------
+# MU-1xx — Audio capture & decimation (AudioDecimator, ModelProfile)
+# ----------------------------------------------------------------------------
+targets:
+  - id: MU-101
+    name: FIR impulse response matches independent golden
+    requirement: FR-audio-decimation
+    tier: *jvm
+    method: unit; impulse through process(); compare vs NumPy golden
+    oracle: >
+      committed golden vectors (app/src/test/resources/goldens), generated
+      by an independent NumPy reimplementation of the spec (float64,
+      replicates the truncating quantizer `(acc*32768).toInt()`). The
+      generator itself is a LOCAL, UNTRACKED tool (mobile/tools/,
+      gitignored per owner instruction 2026-08-13); regenerating reproduces
+      the committed vectors byte-identically (verified 2026-08-13). The
+      committed vectors are the oracle artifact of record.
+    gate: >
+      max abs error <= 2 LSB (PCM16). Justification: 121-term float32
+      accumulation worst-case ~121*eps*fullscale ≈ 0.5 LSB, plus 1 LSB
+      truncation asymmetry; 2 LSB bounds both with margin.
+
+  - id: MU-102
+    name: passband tone preserved (both profiles)
+    requirement: FR-audio-decimation
+    tier: *jvm
+    method: unit; 1 kHz sine @ halves profile, 2 kHz @ speech; steady-state
+      amplitude after group-delay settle
+    oracle: analytic amplitude of the input sine
+    gate: >
+      |passband deviation| <= 0.1 dB. DECLARED 2026-08-13 from first
+      observation (halves 1 kHz: +0.0114 dB; speech 2 kHz: -0.0027 dB;
+      conditions per `conditions.jvm`), set at ~10x the observed deviation.
+      Declared at first setting per rule 5, not retro-fitted.
+
+  - id: MU-103
+    name: stopband attenuation above output Nyquist
+    requirement: FR-audio-decimation
+    tier: *jvm
+    method: unit; 7 kHz tone @ halves (>5512.5 Hz), 12 kHz @ speech
+      (>11025 Hz); residual RMS after settle
+    oracle: analytic input RMS
+    gate: >
+      attenuation <= -70 dB (halves, 7 kHz tone) and <= -75 dB (speech,
+      12 kHz tone). DECLARED 2026-08-13 from first observation — observed
+      -74.53 dB and -80.45 dB respectively (conditions per
+      `conditions.jvm`); floors set ~5 dB above observed. The observed
+      values are stated, not wished (brief rule).
+
+  - id: MU-104
+    name: DC gain unity
+    requirement: FR-audio-decimation
+    tier: *jvm
+    method: unit; constant mid-scale input (16384) long enough to flush
+      group delay; compare output plateau
+    oracle: taps normalized to unity DC by construction (AudioDecimator.kt:57-58)
+    gate: plateau within +/-2 LSB of input value
+
+  - id: MU-105
+    name: linear-phase group delay = 60 samples at input rate
+    requirement: FR-audio-decimation
+    tier: *jvm
+    method: unit; impulse position of output peak
+    oracle: (nTaps-1)/2 = 60 for 121 taps
+    gate: >
+      impulse response symmetric about input-sample delay 60 with its peak
+      there. Corrected 2026-08-13 PRE-measurement (constant unchanged,
+      method fixed): decimated sampling at /4 emits at input indices
+      i ≡ 3 (mod 4), which never lands on 60, so a single-run argmax cannot
+      see the peak; the test reconstructs the full 121-point response from
+      4 (resp. 2) zero-prefixed runs interleaved, then asserts peak at 60
+      and y[60+k] == y[60-k]
+
+  - id: MU-106
+    name: filter state continuity across blocks
+    requirement: FR-audio-decimation (highest-risk item)
+    tier: *jvm
+    method: unit; one long buffer in a single call vs identical data split
+      into 5512-sample blocks, and into adversarial splits (1, 3, 5511,
+      non-multiples of 4); seeded-random signal
+    oracle: single-call output
+    gate: outputs byte-identical (zero tolerance)
+
+  - id: MU-107
+    name: block arithmetic halves — 5512 in, 1378 out
+    requirement: locked constant (5512-sample / 125 ms block)
+    tier: *jvm
+    method: unit; k blocks of 11024 bytes through /4 path
+    oracle: phase-counter arithmetic — floor(totalSamples/4)
+    gate: exactly 1378*k output samples (2756 bytes per block)
+
+  - id: MU-108
+    name: speech path /2 — 5512 in, 2756 out @ 22050
+    requirement: locked constant (wire rate 22050)
+    tier: *jvm
+    method: unit; same battery as MU-107 with factor 2, cutoff 10 kHz
+    oracle: floor(totalSamples/2)
+    gate: exactly 2756*k output samples; profile constant streamRate == 22050
+
+  - id: MU-109
+    name: zero-length input
+    requirement: robustness
+    tier: *jvm
+    method: unit; process() with 0 bytes and with 1 byte (inSamples==0)
+    oracle: code contract — returns 0, no state mutation
+    gate: 0 bytes out; subsequent output identical to a run without the
+      empty call
+
+  - id: MU-110
+    name: remainder carry for non-multiple input sizes
+    requirement: FR-audio-decimation
+    tier: *jvm
+    method: unit; totals identical, chunkings different (e.g. 5+3 vs 8
+      samples); phase persistence across calls
+    oracle: single-call output
+    gate: byte-identical; total out == floor(totalIn/factor)
+
+  - id: MU-111
+    name: odd trailing byte silently discarded (characterization)
+    requirement: defect-candidate
+    tier: *jvm
+    method: unit; lengthBytes odd — document that the trailing byte is
+      dropped with no carry (AudioDecimator.kt:74)
+    oracle: current behaviour
+    gate: characterization — asserts today's behaviour; candidate D-M entry
+
+  - id: MU-112
+    name: undersized output buffer drops samples silently (characterization)
+    requirement: defect-candidate
+    tier: *jvm
+    method: unit; output array smaller than maxOutputBytes; samples skipped
+      while phase/history advance (AudioDecimator.kt:103-107)
+    oracle: current behaviour
+    gate: characterization — asserts today's behaviour; candidate D-M entry
+
+  - id: MU-113
+    name: PCM16 little-endian layout both directions
+    requirement: locked constant (PCM16-LE wire)
+    tier: *jvm
+    method: unit; known sample values; assert byte order in and out
+      (AudioDecimator.kt:84-88, 104-105)
+    oracle: hand-computed byte pairs
+    gate: exact bytes
+
+  - id: MU-114
+    name: sample/byte/duration conversions, both profiles
+    requirement: locked constants
+    tier: *jvm
+    method: unit; pure arithmetic pinned — 1378 samples = 2756 B ≈ 124.99 ms
+      @ 11025; 2756 samples = 5512 B ≈ 124.99 ms @ 22050; capture block
+      5512 samples = 11024 B = 125.0 ms - 11.3 us @ 44100 (5512 vs 5512.5
+      truncation stated)
+    oracle: arithmetic
+    gate: exact values as stated
+
+  - id: MU-115
+    name: decimator constructor invariants
+    requirement: FR-audio-decimation
+    tier: *jvm
+    method: unit; numTaps=120 -> effective 121; factor 0 and cutoff >=
+      Nyquist -> IllegalArgumentException (AudioDecimator.kt:38-42)
+    oracle: code contract
+    gate: as stated
+
+# ----------------------------------------------------------------------------
+# MU-2xx — Jitter buffer (JitterBuffer via PcmSink seam)
+# ----------------------------------------------------------------------------
+  - id: MU-201
+    name: prebuffer gate before playback
+    requirement: REC-1 (prebuffer row)
+    tier: *jvm
+    method: unit; PcmSink fake; write below/at threshold
+    oracle: (initialBufferMs*rate*2)/1000
+    gate: play() not called below 4410 B @ 11025 (8820 B @ 22050); called at
+      threshold
+
+  - id: MU-202
+    name: ring capacity and drop-oldest overflow
+    requirement: REC-1 (capacity row)
+    tier: *jvm
+    method: unit; fill beyond capacity; assert oldest bytes gone, newest kept;
+      chunk > whole buffer keeps tail only (JitterBuffer.kt:124-141)
+    oracle: ring arithmetic
+    gate: maxBytes == 33075 @ 11025, 66150 @ 22050; retained bytes exactly
+      the newest maxBytes
+
+  - id: MU-203
+    name: drain chunk size and pacing contract
+    requirement: playback continuity
+    tier: *jvm
+    method: unit; fake blocking sink records write sizes
+    oracle: drainChunkBytes = 512 (256 samples)
+    gate: all steady-state writes exactly 512 B; pacing derives from sink
+      blocking (documented, not timed)
+
+  - id: MU-204
+    name: underrun inserts silence and counts
+    requirement: playback continuity
+    tier: *jvm
+    method: unit; drain with empty ring
+    oracle: silenceChunk write (JitterBuffer.kt:237-241)
+    gate: 512 B of zeros written; underrun counter increments; no exception
+
+  - id: MU-205
+    name: adaptive prebuffer step and ceiling
+    requirement: REC-1
+    tier: *jvm
+    method: unit; force 3, 6, ... consecutive underruns
+    oracle: +50 ms per 3 consecutive, ceiling 500 ms; takes effect next
+      start() only (initialBufferBytes snapshot at drainLoop entry,
+      JitterBuffer.kt:169,243-247)
+    gate: as stated, including the next-start-only property (characterization)
+
+  - id: MU-206
+    name: partial drain zero-pads to full write (characterization)
+    requirement: defect-candidate
+    tier: *jvm
+    method: unit; ring holds < 512 B; full 512-B write with zero tail
+      (JitterBuffer.kt:214-235)
+    oracle: current behaviour
+    gate: characterization — up to 511 zero bytes injected per partial
+      drain; candidate D-M entry
+
+  - id: MU-207
+    name: FIFO byte-stream semantics (no reorder/dup detection)
+    requirement: characterization
+    tier: *jvm
+    method: unit; duplicate and "late" chunks written; output is strict
+      arrival-order byte stream
+    oracle: current behaviour (buffer has no sequence awareness; gap
+      handling lives in MainViewModel — MU-703)
+    gate: characterization
+
+  - id: MU-208
+    name: burst handling
+    requirement: robustness
+    tier: *jvm
+    method: unit; N chunks written at once, N*size > capacity
+    oracle: same drop-oldest arithmetic as MU-202
+    gate: buffer holds exactly newest maxBytes; no exception. (Sustained
+      overproduction runs: DEFERRED)
+
+  - id: MU-209
+    name: byte<->ms math at both rates
+    requirement: REC-1; off-by-2x guard
+    tier: *jvm
+    method: unit; bufferLevelMs at known fill for 11025 and 22050
+    oracle: bytes*1000/(rate*2)
+    gate: exact; the 2x-wrong-rate construction (default 11025 used at
+      22050) demonstrably yields 2x ms error (documented trap: constructor
+      default JitterBuffer.kt:28)
+
+  - id: MU-210
+    name: stop/start lifecycle
+    requirement: robustness
+    tier: *jvm
+    method: unit; stop resets positions; restart drains fresh; document the
+      500 ms join bound and the stalled-thread revival risk
+      (JitterBuffer.kt:100)
+    oracle: current behaviour
+    gate: state reset exact; thread-leak risk characterized; candidate D-M
+      entry
+
+# ----------------------------------------------------------------------------
+# MU-3xx — Model switching & staleness (MainViewModel + in-process gRPC)
+# ----------------------------------------------------------------------------
+  - id: MU-301
+    name: sonicsight-model metadata carries selected id at stream open
+    requirement: locked constant (model selection)
+    tier: *jvm
+    method: unit; in-process server captures headers
+      (GrpcVideoRepository.kt:50-54)
+    oracle: server-side ServerInterceptor capture
+    gate: header key "sonicsight-model", value == selected profile id, on
+      every open
+
+  - id: MU-302
+    name: stale echoed model_id dropped before playback flows
+    requirement: locked constant (staleness)
+    tier: *jvm
+    method: unit; handleStreamResult with mismatching model_id
+      (MainViewModel.kt:274-278)
+    oracle: audio flows and LiveData untouched
+    gate: zero emissions from stale results
+
+  - id: MU-303
+    name: empty model_id accepted (backward compat, characterization)
+    requirement: characterization
+    tier: *jvm
+    method: unit; result with model_id ""
+    oracle: current behaviour (MainViewModel.kt:275)
+    gate: characterization — processed, not dropped
+
+  - id: MU-304
+    name: single switch cycle — cancel, reopen, no cross-profile leak
+    requirement: locked constant (cancel-and-reopen)
+    tier: *jvm
+    method: unit; in-process server observes old-stream cancellation and
+      new-stream open with new metadata; stale in-flight results injected
+      during the window
+    oracle: server-side observation + flow assertions (Turbine)
+    gate: old stream cancelled server-side; new header id correct; no stale
+      audio reaches flows. (100-cycle endurance: DEFERRED)
+
+  - id: MU-305
+    name: capture profile reconfiguration constants per switch
+    requirement: locked constants
+    tier: *jvm
+    method: unit; ModelProfile invariants — interval 125/33/125 ms, factor
+      4/2/4, rate 11025/22050/11025, frameKind, heatmapCount 2/1/0,
+      streamRate*decimFactor == 44100, cutoff < Nyquist; byId round-trip;
+      next() cycles ALL
+    oracle: ModelProfile.kt:51-105
+    gate: exact table; byId unknown-id fallback to DEFAULT characterized
+      (candidate finding — masks typos client-side while server rejects)
+
+  - id: MU-306
+    name: unknown model id -> FAILED_PRECONDITION -> Error state, no crash
+    requirement: locked constant; NFR-robustness
+    tier: *jvm
+    method: unit; in-process server rejects with FAILED_PRECONDITION
+    oracle: UiState assertions
+    gate: UiState.Error surfaced containing the status; no crash; stream
+      cleanly closed. (Current mapping is untyped string plumbing — see
+      MU-403.)
+
+  - id: MU-307
+    name: metadata header always attached (client half of NFR-COMPAT-002)
+    requirement: NFR-COMPAT-002
+    tier: *jvm
+    method: unit; every streamProcess call carries the header, including
+      empty-string id
+    oracle: server-side capture
+    gate: header present on 100% of opens (server-default-on-absent is a
+      server behaviour, out of client-test scope — stated, not simulated)
+
+# ----------------------------------------------------------------------------
+# MU-4xx — Transport (GrpcModule, GrpcVideoRepository, VideoChunkEmitter)
+# ----------------------------------------------------------------------------
+  - id: MU-401
+    name: channel configuration constants
+    requirement: locked constants (transport)
+    tier: *jvm
+    method: unit; channel-factory seam captures builder parameters
+      (GrpcModule.kt:50-56)
+    oracle: source constants
+    gate: plaintext; port 50051; keepAliveTime 30 s;
+      keepAliveWithoutCalls true; keepAliveTimeout 10 s;
+      maxInboundMessageSize 16777216
+
+  - id: MU-402
+    name: oversized inbound message -> RESOURCE_EXHAUSTED -> error state
+    requirement: locked constant (16 MB cap)
+    tier: *jvm
+    method: unit; in-process channel configured with the production cap;
+      fake server sends > 16 MiB result
+    oracle: gRPC status + UiState
+    gate: RESOURCE_EXHAUSTED raised; surfaces as UiState.Error, no crash
+
+  - id: MU-403
+    name: status handling characterization — no typed mapping exists
+    requirement: characterization + defect-candidate
+    tier: *jvm
+    method: unit; fake server fails with UNAVAILABLE, DEADLINE_EXCEEDED,
+      FAILED_PRECONDITION, INTERNAL, CANCELLED; assert what actually
+      happens: raw StatusException -> flow .catch -> UiState.Error("Stream
+      error: ...") (MainViewModel.kt:229-231); describeError substring map
+      (MainActivity.kt:779-792) tested as pure function post-seam
+    oracle: current behaviour
+    gate: characterization per code; absence of typed mapping recorded as
+      D-M entry (unused catch/map imports GrpcVideoRepository.kt:11-12
+      cited)
+
+  - id: MU-404
+    name: processVideo swallows CancellationException (characterization)
+    requirement: defect-candidate
+    tier: *jvm
+    method: unit; cancel caller during processVideo; Result.failure returned
+      instead of propagation (GrpcVideoRepository.kt:35-37)
+    oracle: current behaviour
+    gate: characterization; candidate D-M entry (breaks structured
+      concurrency)
+
+  - id: MU-405
+    name: collector cancellation closes the stream
+    requirement: NFR-resource-hygiene
+    tier: *jvm
+    method: unit; cancel collecting scope; in-process server observes
+      cancellation; no orphaned collector (leak check via coroutine test
+      scaffolding)
+    oracle: server-side observation
+    gate: server sees cancel; no coroutine leak after test scope closes
+
+  - id: MU-406
+    name: abrupt server half-close mid-stream
+    requirement: NFR-robustness
+    tier: *jvm
+    method: unit; fake server onCompleted/onError mid-stream
+    oracle: flow completion/catch path
+    gate: collector terminates cleanly into Error/completed state; no hang,
+      no crash
+
+  - id: MU-407
+    name: loss policy — audio lossless in-order, frames keep-latest drop
+    requirement: locked constant (emitter loss policy)
+    tier: *jvm
+    method: unit; single test, saturated 64-slot out-flow with slow
+      collector: sendAudioChunk suspends and delivers all in order;
+      sendStreamChunk tryEmit drops (MainViewModel.kt:250-265, buffer 64)
+    oracle: collected sequence
+    gate: 100% of audio chunks delivered in emission order; >=1 frame chunk
+      demonstrably dropped under saturation; no audio reordering.
+      (Sustained-saturation soak: DEFERRED)
+
+  - id: MU-408
+    name: host persistence round-trip
+    requirement: UC-06 (persistence half)
+    tier: *jvm
+    method: unit; HostStore seam — setHost persists, currentHost reloads,
+      channel rebuilt on next use
+    oracle: fake store
+    gate: round-trip exact; old channel shut down (shutdown-await
+      characterized as graceful-no-await — see risks)
+
+  - id: MU-409
+    name: VideoChunkEmitter chunking contract
+    requirement: FR-upload (legacy path)
+    tier: *jvm
+    method: unit; duration-provider seam; temp files 0 B, < 256 KiB,
+      = 256 KiB, > 256 KiB
+    oracle: file bytes
+    gate: 262144-B chunks; chunk_index 0..n contiguous; metadata on first
+      chunk only; is_last on final chunk. Empty file emits zero chunks —
+      characterization + candidate finding
+
+# ----------------------------------------------------------------------------
+# MU-5xx — Frame pipeline (ImageTransform geometry seams, throttle seam)
+# ----------------------------------------------------------------------------
+  - id: MU-501
+    name: halves crop geometry, landscape
+    requirement: locked constant (1280x720 -> halves -> 224x224)
+    tier: *jvm
+    method: unit; pure geometry — 640x720 half -> shortest-edge-256 ->
+      center crop
+    oracle: arithmetic (ImageTransform.kt:44-83)
+    gate: scaled 256x288; crop rect (16,32,224,224)
+
+  - id: MU-502
+    name: D2 pin — portrait halves vertical FOV retention 24.6 %
+    requirement: D2 (documented defect — pin, do not fix)
+    tier: *jvm
+    method: unit; 360x1280 half -> 256x910 -> startY 343
+    oracle: arithmetic
+    gate: retention == 224/910 = 24.62 % (asserted as 224/910 exactly;
+      24.6 % cited in name per ledger)
+
+  - id: MU-503
+    name: rotation handling at 0/90/180/270
+    requirement: FR-frame-pipeline
+    tier: *robo
+    method: Robolectric; synthetic bitmaps with marked corners through the
+      rotate+split+crop chain
+    oracle: marker positions computed analytically
+    gate: exact expected rectangles at all four rotations
+
+  - id: MU-504
+    name: letterbox geometry 1280x720 -> 224x126 + 49 px bars
+    requirement: locked constant (speech/pixel frame path)
+    tier: *jvm
+    method: unit; pure letterbox math (scale, offsets) extracted seam;
+      cross-checked against CoordinateMap.frameToLetterboxNorm
+    oracle: arithmetic (scale 0.175)
+    gate: content 224x126, bars 49 top/bottom, scale 224/1280
+
+  - id: MU-505
+    name: wire JPEG quality and decodability
+    requirement: locked constant (q90)
+    tier: *robo
+    method: Robolectric; compress via the real path; decode output; record
+      byte size. Intermediate YUV->JPEG q100 step documented in test KDoc
+    oracle: BitmapFactory decode + source constant (ImageTransform.kt:107,
+      109,124)
+    gate: quality parameter == 90 at all three wire call sites (source pin);
+      output decodes to 224x224; size band TBD-after-first-observation
+
+  - id: MU-506
+    name: frame throttle gate arithmetic
+    requirement: locked constant (8 fps / ~30 fps)
+    tier: *jvm
+    method: unit; ThrottleGate seam with fake clock; 30 fps synthetic
+      delivery timestamps
+    oracle: gate arithmetic (>= frameIntervalMs, MainActivity.kt:869)
+    gate: interval 125 ms passes every 4th frame of a 33.3 ms cadence
+      (~7.5 fps effective — characterized, not "8"); interval 33 ms passes
+      ~every frame (~30 fps)
+
+  - id: MU-507
+    name: keep-latest at the analyzer
+    requirement: locked constant (keep-latest)
+    tier: *jvm
+    method: unit; throttled frames closed immediately (gate false ->
+      close()); CameraX STRATEGY_KEEP_ONLY_LATEST pinned by source constant
+      reference (builder assertion requires instrumentation — stated as
+      not measured at unit level)
+    oracle: fake ImageProxy close tracking
+    gate: non-passing frames closed synchronously; zero queuing
+
+  - id: MU-508
+    name: stride matrix — YUV conversion vs independent reference
+    requirement: defect-discovery (imageProxyToBitmap assumes packed NV21)
+    tier: *robo
+    method: unit; fake ImageProxy planes — rowStride == width and
+      rowStride > width (1280 with 1408), U/V pixelStride 1 and 2, both
+      combined, at all four rotations
+    oracle: independent stride-honouring YUV_420_888 -> RGB reference
+      conversion in the test source set
+    gate: per-pixel match. EXPECTED RESULT — most of the matrix FAILS
+      (ImageTransform.kt:28-32 ignores strides); failures recorded as a
+      D-M entry with the exact failing configurations, in the four-label
+      vocabulary. Fix decision deferred to MI-DEV-002 on demo hardware
+      (owner decision required before any fix).
+
+# ----------------------------------------------------------------------------
+# MU-6xx — Heatmap overlay & touch (MaskProcessor, CoordinateMap, MagmaPalette)
+# ----------------------------------------------------------------------------
+  - id: MU-601
+    name: heatmap decode and alpha curve
+    requirement: locked constant (56x56 uint8 wire)
+    tier: *robo
+    method: pure ARGB-computation seam where possible; sqrt-side inference;
+      alpha = (v/255)^2.5 * 200 monotonicity; non-square byte count falls
+      back 56x56 (characterization + candidate finding)
+    oracle: arithmetic (MaskProcessor.kt:100-111)
+    gate: side inference exact for 56 and any square; alpha strictly
+      monotonic; fallback characterized
+
+  - id: MU-602
+    name: overlay render dimensions per REC-2
+    requirement: REC-2
+    tier: *robo
+    method: unit; dims of rendered outputs per heatmapCount and pixel mode
+    oracle: MaskProcessor.kt:140,190; MainViewModel.kt:394-399
+    gate: each map scaled to the fixed 336x336 target regardless of
+      inferred side; halves stitched 672x336; single 336x336; pixel
+      grid*24 (336x336 @ 14x14)
+
+  - id: MU-603
+    name: touch chain — view -> frame -> norm -> cell
+    requirement: UC-touch; locked constant (14x14 native grid)
+    tier: *jvm
+    method: unit; extend existing CoordinateMapTest — corners, exact k/14
+      boundary values (truncation toward zero), xNorm==1.0 clamp into cell
+      13, outside-frame null
+    oracle: arithmetic (CoordinateMap.kt:33-83)
+    gate: exact cell for every boundary case enumerated in the test
+
+  - id: MU-604
+    name: portrait and non-square-grid mapping variants
+    requirement: UC-touch
+    tier: *jvm
+    method: unit; portrait frame dims, non-square grid (e.g. 14x7)
+    oracle: arithmetic
+    gate: exact mapping (fills the gap the existing test file names)
+
+  - id: MU-605
+    name: pixel/freeze protocol client contract
+    requirement: A2/A3 amendments
+    tier: *jvm
+    method: unit; ViewModel — queries carry window_id 0 and radius
+      1/gridW; freeze is level-stamped on FRAME and AUDIO chunks; frozen
+      overlay pinned except first map of stream
+    oracle: MainViewModel.kt:113-146,334; MainActivity.kt:929,1103 (chunk
+      assembly via seam)
+    gate: as stated, including the audio-chunk freeze flag (regression pin
+      for the documented flapping fix)
+
+  - id: MU-606
+    name: MagmaPalette properties
+    requirement: UI-correctness
+    tier: *jvm
+    method: unit; monotonic ordering across stops, interpolation bounds,
+      clamp at ends
+    oracle: arithmetic
+    gate: monotone lightness proxy along ramp; no out-of-range ARGB
+
+  - id: MU-607
+    name: receive-side cadence handling (REC-4)
+    requirement: REC-4
+    tier: *jvm
+    method: unit; inter-result gap > 500 ms logs degradation; absent
+      audioSampleCount uses 1250-sample fallback
+    oracle: MainViewModel.kt:293-313
+    gate: characterization — thresholds as in source (1250 ≈ 113 ms @
+      11025, not 125 ms — stated)
+
+# ----------------------------------------------------------------------------
+# MU-7xx — ViewModel & state (MainViewModel, lifecycle pins)
+# ----------------------------------------------------------------------------
+  - id: MU-701
+    name: UiState transitions — real state set (REC-5)
+    requirement: REC-5
+    tier: *jvm
+    method: unit; Turbine on uiState — Idle->Streaming, ->Error (catch and
+      !success), Error->Idle (resetState), Idle->Uploading->
+      NavigationReady|Error; unguarded setters characterized
+    oracle: MainViewModel.kt:25-36,211-236,486-493
+    gate: transitions exact; absence of illegal-transition guards recorded
+      as characterization (candidate finding, not assumed bug)
+
+  - id: MU-702
+    name: startStreaming session reset
+    requirement: FR-stream-lifecycle
+    tier: *jvm
+    method: unit; frozen/following/solo cleared, seq -1, fresh out-flow (no
+      replay of old-profile chunks)
+    oracle: MainViewModel.kt:211-224
+    gate: all reset fields exact; a chunk emitted pre-switch never reaches
+      the new stream
+
+  - id: MU-703
+    name: gap silence insertion arithmetic
+    requirement: FR-playback-continuity
+    tier: *jvm
+    method: unit; sequence skip k results; silence = k * samplesPerResult *
+      2 bytes to BOTH flows; fallback 1250 when audioSampleCount absent
+    oracle: MainViewModel.kt:302-313
+    gate: exact byte counts at both wire rates
+
+  - id: MU-704
+    name: no emissions after cancellation
+    requirement: NFR-resource-hygiene
+    tier: *jvm
+    method: unit; Turbine; stopStreaming then inject late results at the
+      fake server
+    oracle: flow silence
+    gate: zero post-cancel emissions
+
+  - id: MU-705
+    name: FR-006 pin — capture survives background (characterization)
+    requirement: FR-006 (documented defect — pin, do not fix)
+    tier: *robo
+    method: Robolectric ActivityController — pause/stop; capture state and
+      audio job unaffected (no onPause/onStop overrides exist,
+      MainActivity.kt:1177-1183)
+    oracle: current behaviour
+    gate: characterization named for FR-006; KDoc marks it a known gap
+
+  - id: MU-706
+    name: FR-P02 pin — permission denial path (characterization)
+    requirement: FR-P02 (declared product gap)
+    tier: *robo
+    method: Robolectric; deny -> toast + finish(); no rationale, no
+      settings deep-link, all-or-nothing grant
+    oracle: MainActivity.kt:1167-1175
+    gate: characterization labelled product gap, not bug
+
+  - id: MU-707
+    name: host input — no validation; persisted (REC-5)
+    requirement: UC-06 as-implemented
+    tier: *jvm
+    method: unit; raw string reaches HostStore unvalidated
+      (characterization + finding); persists across store reload
+    oracle: MainActivity.kt:468-486 (dialog path via seam), GrpcModule store
+    gate: characterization; absence of validation recorded as finding
+
+  - id: MU-708
+    name: buffering and failure results
+    requirement: FR-stream-lifecycle
+    tier: *jvm
+    method: unit; is_buffering results produce no state/flow changes;
+      !success surfaces errorMessage as UiState.Error
+    oracle: MainViewModel.kt:280-289
+    gate: exact
+
+# ----------------------------------------------------------------------------
+# MU-8xx — Wire contract
+# ----------------------------------------------------------------------------
+  - id: MU-801
+    name: proto cross-repo SHA-256 pin (NFR-COMPAT-001)
+    requirement: NFR-COMPAT-001
+    tier: *jvm
+    method: unit; SHA-256 of app/src/main/proto/sonicsight.proto ==
+      committed constant
+    oracle: observed 2026-08-13, identical in both repos:
+      ba76eaae8494a7d225be7b324ca53172c184958ea8e8be814984d3d9abb78005
+    gate: exact hash. Test KDoc states the constant is updated deliberately
+      on intentional contract change only — never to green a red test
+
+  - id: MU-802
+    name: speech wire rate pin — 22050 (REC-3)
+    requirement: locked constant; REC-3
+    tier: *jvm
+    method: unit; ModelProfile.MULTISENSORY.streamRate == 22050;
+      streamRate*decimFactor == 44100; KDoc cites proto:199-204 (21000 is
+      the engine-internal rate) so nobody "corrects" it
+    oracle: source + proto comment
+    gate: exact
+
+  - id: MU-803
+    name: golden serialized fixtures decode (lite runtime)
+    requirement: NFR-COMPAT-001
+    tier: *jvm
+    method: >
+      unit; StreamChunk/StreamResult/PixelQuery wire fixtures parse to
+      expected field values under protobuf-lite, plus encode round-trip
+      byte-compare. METHOD CORRECTED 2026-08-14 pre-measurement: fixtures
+      are HAND-DERIVED wire bytes written in-test from the protobuf wire
+      spec (tag/varint/fixed32 arithmetic documented per byte) rather than
+      generated by an external tool — stronger independence, and no
+      generated artifacts to keep in sync (test-generation tools stay
+      untracked per owner instruction).
+    oracle: the protobuf wire-format specification itself — every fixture
+      byte derived by hand from field numbers in sonicsight.proto,
+      independent of the runtime under test
+    gate: field-exact decode; encoder reproduces the hand bytes exactly
+
+  - id: MU-804
+    name: field-semantics pins
+    requirement: wire contract
+    tier: *jvm
+    method: unit; model_id field 15 echo used by filter; window_id field 24;
+      energy grid dims explicit (fields 20/21); audio field selection rule
+      audio_pcm_hi iff streamRate > 11025 (MainActivity.kt:1072 via seam)
+    oracle: proto + source
+    gate: exact
+
+# ----------------------------------------------------------------------------
+# MI-DEV — Device preprocessing probes (Tier 2; the only tier proving capture)
+# ----------------------------------------------------------------------------
+  - id: MI-DEV-002
+    name: frame differential oracle on hardware
+    requirement: defect-discovery / demo-hardware verification
+    tier: *device
+    method: instrumented; CameraX ImageAnalysis 1280x720, ~10 frames; record
+      per-plane rowStride/pixelStride/rotation; convert each frame via app
+      path AND via independent stride-honouring reference; per-pixel diff;
+      then run real chain (rotate/split/256/crop224/JPEG90) and record dims,
+      JPEG bytes, per-channel mean/std; measure delivered cadence over 10 s
+      and the >=125 ms gate
+    oracle: reference conversion (test source set, independent of app code)
+    gate: >
+      per-channel max abs diff <= 16 AND per-channel mean abs diff <= 2.
+      Derived BEFORE any device run (2026-08-13) — the first observation is
+      contaminated by the defect under test, so the tolerance must come from
+      arithmetic, not observation. Derivation: (a) integer BT.601 YUV->RGB
+      rounding differences between two correct implementations: <= 2 LSB per
+      channel; (b) JPEG q100 4:2:0 round-trip (chroma grid already 4:2:0 in
+      YUV_420_888, no further subsampling loss): near-unity quantization
+      tables round each DCT coefficient by <= 0.5 step, worst-case spatial
+      accumulation <= (1/8)*sum(0.5*q) = 4 LSB luma; chroma error <= 4 LSB
+      through conversion coefficients (max |coef| ~ 1.772 for B<-U) <= 8 LSB
+      in RGB; (c) total worst case 2+4+8 = 14, gated at 16 for power-of-two
+      headroom. Mean: DCT rounding noise is zero-mean, per-sample RMS
+      <= sqrt(64/12)/8 ~ 0.29 LSB luma, ~1 LSB through chroma — gated at 2.
+      The stride-defect signature sits far outside both bounds (whole-pixel
+      row/column displacement, typical diffs 50+ on a large pixel fraction),
+      so pass/fail separates cleanly. Max, mean and fraction-over-16 are
+      reported regardless of verdict; first-run numbers reported to owner
+      before any fix decision (sequence in MOBILE_TEST_PLAN.md,
+      "Documented-defect pins" section). Output: JSON per device.
+
+  - id: MI-DEV-003
+    name: audio preprocessing determinism + capability on hardware
+    requirement: portability evidence (why capture 44100 + decimate)
+    tier: *device
+    method: instrumented; (a) determinism — committed synthetic PCM through
+      AudioDecimator on device, byte-compare vs JVM golden; (b) capability —
+      {44100,22050,11025} x {MONO,STEREO} x {PCM_16BIT,FLOAT}:
+      getMinBufferSize + AudioRecord init success; 2 s real capture at
+      44100/mono/16 -> effective rate from sample count/elapsed; AudioTrack
+      min buffers; dual panned playback survival
+    oracle: (a) JVM golden (exact); (b) inventory — no gate, evidence table
+    gate: (a) byte-identical; (b) no gate — recorded facts; effective-rate
+      gate TBD-after-first-observation. Output states explicitly the
+      connection - low rates not universally supported is the reason the
+      app captures at 44100 and decimates in software.
+
+# ----------------------------------------------------------------------------
+# Deferred — listed so the plan states its own coverage. Not implemented.
+# Ask owner before starting any of these.
+# ----------------------------------------------------------------------------
+deferred:
+  - load / stress / spike / soak / endurance scenarios of any kind
+  - 100-cycle rapid model-switch endurance (single-cycle correctness stays
+    in MU-304)
+  - sustained-overproduction and backpressure saturation runs (bounded
+    saturation assertions stay in MU-407/MU-208)
+  - Tier 0 Robolectric multi-API matrix (single-SDK Robolectric remains as
+    a unit-test enabler only)
+  - Tier 1 Gradle Managed Devices emulator matrix
+  - Phase 5 entirely (accessibility, layout, performance)

@@ -22,6 +22,13 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    testOptions {
+        // Android framework statics (android.util.Log, android.os.Process)
+        // return stub defaults on the JVM instead of throwing "not mocked" —
+        // required by the MU-2xx suite which exercises JitterBuffer off-device.
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -49,6 +56,14 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
     testImplementation(libs.junit)
+    // MU-3xx/4xx harness: deterministic coroutines, Flow assertions, and an
+    // in-process gRPC server. Versions pinned to the app's coroutines 1.7.3
+    // and grpc 1.62.2 lines.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("app.cash.turbine:turbine:1.0.0")
+    testImplementation("io.grpc:grpc-testing:1.62.2")
+    testImplementation("io.grpc:grpc-inprocess:1.62.2")
+    testImplementation("androidx.arch.core:core-testing:2.2.0")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     val cameraxVersion = "1.3.1"

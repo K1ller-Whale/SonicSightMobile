@@ -8,23 +8,33 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.File
 
-class VideoChunkEmitter(private val videoFile: File) {
+/**
+ * Test seam S8 (docs/SEAMS.md): the duration lookup is constructor-injected
+ * with the MediaMetadataRetriever implementation as default, so the pure
+ * chunking logic runs on the JVM against temp files.
+ */
+class VideoChunkEmitter(
+    private val videoFile: File,
+    private val durationProvider: (File) -> Long = ::retrieverVideoDuration,
+) {
     companion object {
         const val CHUNK_SIZE = 256 * 1024  // 256KB
-    }
 
-    private fun getVideoDuration(): Long {
-        val retriever = MediaMetadataRetriever()
-        return try {
-            retriever.setDataSource(videoFile.absolutePath)
-            val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            time?.toLong() ?: 0L
-        } catch (e: Exception) {
-            0L
-        } finally {
-            retriever.release()
+        private fun retrieverVideoDuration(file: File): Long {
+            val retriever = MediaMetadataRetriever()
+            return try {
+                retriever.setDataSource(file.absolutePath)
+                val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                time?.toLong() ?: 0L
+            } catch (e: Exception) {
+                0L
+            } finally {
+                retriever.release()
+            }
         }
     }
+
+    private fun getVideoDuration(): Long = durationProvider(videoFile)
 
     fun emitChunks(): Flow<VideoChunk> = flow {
         val totalSize = videoFile.length()

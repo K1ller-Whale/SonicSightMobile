@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Local test-generation tools — not tracked (owner instruction 2026-08-13)
+mobile/tools/
