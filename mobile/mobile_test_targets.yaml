@@ -150,9 +150,11 @@ targets:
     method: unit; 1 kHz sine @ halves profile, 2 kHz @ speech; steady-state
       amplitude after group-delay settle
     oracle: analytic amplitude of the input sine
-    gate: TBD-after-first-observation (Hamming-sinc passband ripple is not
-      a locked constant; the observed deviation is stated, then declared as
-      the gate — no number is written before measurement)
+    gate: >
+      |passband deviation| <= 0.1 dB. DECLARED 2026-08-13 from first
+      observation (halves 1 kHz: +0.0114 dB; speech 2 kHz: -0.0027 dB;
+      conditions per `conditions.jvm`), set at ~10x the observed deviation.
+      Declared at first setting per rule 5, not retro-fitted.
 
   - id: MU-103
     name: stopband attenuation above output Nyquist
@@ -161,8 +163,12 @@ targets:
     method: unit; 7 kHz tone @ halves (>5512.5 Hz), 12 kHz @ speech
       (>11025 Hz); residual RMS after settle
     oracle: analytic input RMS
-    gate: TBD-after-first-observation — the observed dB floor is stated, not
-      wished (brief rule). Recorded per profile.
+    gate: >
+      attenuation <= -70 dB (halves, 7 kHz tone) and <= -75 dB (speech,
+      12 kHz tone). DECLARED 2026-08-13 from first observation — observed
+      -74.53 dB and -80.45 dB respectively (conditions per
+      `conditions.jvm`); floors set ~5 dB above observed. The observed
+      values are stated, not wished (brief rule).
 
   - id: MU-104
     name: DC gain unity
