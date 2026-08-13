@@ -179,8 +179,14 @@ targets:
     tier: *jvm
     method: unit; impulse position of output peak
     oracle: (nTaps-1)/2 = 60 for 121 taps
-    gate: peak at exactly 60 input-sample delay (15 output samples @ /4,
-      30 @ /2)
+    gate: >
+      impulse response symmetric about input-sample delay 60 with its peak
+      there. Corrected 2026-08-13 PRE-measurement (constant unchanged,
+      method fixed): decimated sampling at /4 emits at input indices
+      i ≡ 3 (mod 4), which never lands on 60, so a single-run argmax cannot
+      see the peak; the test reconstructs the full 121-point response from
+      4 (resp. 2) zero-prefixed runs interleaved, then asserts peak at 60
+      and y[60+k] == y[60-k]
 
   - id: MU-106
     name: filter state continuity across blocks
@@ -841,11 +847,26 @@ targets:
       JPEG bytes, per-channel mean/std; measure delivered cadence over 10 s
       and the >=125 ms gate
     oracle: reference conversion (test source set, independent of app code)
-    gate: TBD-after-first-observation — the JPEG-q100 round-trip noise floor
-      must be observed on the demo phone before a numeric match tolerance is
-      declared; first-run numbers reported to owner before any fix decision
-      (sequence in MOBILE_TEST_PLAN.md, "Documented-defect pins" section).
-      Output: JSON per device.
+    gate: >
+      per-channel max abs diff <= 16 AND per-channel mean abs diff <= 2.
+      Derived BEFORE any device run (2026-08-13) — the first observation is
+      contaminated by the defect under test, so the tolerance must come from
+      arithmetic, not observation. Derivation: (a) integer BT.601 YUV->RGB
+      rounding differences between two correct implementations: <= 2 LSB per
+      channel; (b) JPEG q100 4:2:0 round-trip (chroma grid already 4:2:0 in
+      YUV_420_888, no further subsampling loss): near-unity quantization
+      tables round each DCT coefficient by <= 0.5 step, worst-case spatial
+      accumulation <= (1/8)*sum(0.5*q) = 4 LSB luma; chroma error <= 4 LSB
+      through conversion coefficients (max |coef| ~ 1.772 for B<-U) <= 8 LSB
+      in RGB; (c) total worst case 2+4+8 = 14, gated at 16 for power-of-two
+      headroom. Mean: DCT rounding noise is zero-mean, per-sample RMS
+      <= sqrt(64/12)/8 ~ 0.29 LSB luma, ~1 LSB through chroma — gated at 2.
+      The stride-defect signature sits far outside both bounds (whole-pixel
+      row/column displacement, typical diffs 50+ on a large pixel fraction),
+      so pass/fail separates cleanly. Max, mean and fraction-over-16 are
+      reported regardless of verdict; first-run numbers reported to owner
+      before any fix decision (sequence in MOBILE_TEST_PLAN.md,
+      "Documented-defect pins" section). Output: JSON per device.
 
   - id: MI-DEV-003
     name: audio preprocessing determinism + capability on hardware
