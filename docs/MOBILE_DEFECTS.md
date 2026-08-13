@@ -39,3 +39,31 @@ a wrong entry is reclassified with the reason kept.
   set (reconciliation REC-6 in `mobile/mobile_test_targets.yaml`); no
   mobile test pins or `@Ignore`s it. Both findings are source-inspection
   results, not runtime measurements.
+
+---
+
+## D-M-2 — JitterBuffer drain thread survives stop() and revives into the next start()
+
+- **Status:** open, bounded
+- **Date:** 2026-08-13
+- **Method:** JVM unit testing through seam S1 (deterministic fake sink);
+  behaviour observed live during MU-2xx test development, then pinned.
+- **Finding:** `stop()` joins the drain thread with a 500 ms timeout
+  (`JitterBuffer.kt:100`) and proceeds regardless. A thread stalled inside
+  the sink's blocking `write()` (production: `AudioTrack.write`) survives
+  the join, and because it re-checks the shared `running` flag on its next
+  loop iteration, a subsequent `start()` that has already set
+  `running = true` **revives the old thread alongside the new one** — two
+  drainers on one ring buffer. Observed deterministically on the JVM: the
+  revived thread consumed ring bytes belonging to the new stream
+  (originally surfaced as a test-design race in the MU-205 restart test;
+  reproduced and pinned by
+  `mu210_stopWithStalledSinkLeavesZombieDrainThread_characterization`).
+- **Bound:** requires the sink write to stall longer than the 500 ms join
+  at exactly stop() time, and a restart while the old thread is still
+  parked — plausible when `AudioTrack.write` blocks on a full track buffer
+  during teardown (e.g. rapid model switch). Not observed on hardware; no
+  runtime measurement claimed.
+- **Disposition rationale:** *open, bounded* — pinned by a
+  characterization test; no fix applied (no-fix default; a fix would need
+  owner approval per the mobile fix policy).
