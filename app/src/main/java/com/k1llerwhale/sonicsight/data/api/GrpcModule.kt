@@ -1,6 +1,7 @@
 package com.k1llerwhale.sonicsight.data.api
 
 import android.content.Context
+import androidx.annotation.VisibleForTesting
 import io.grpc.ManagedChannel
 import io.grpc.ManagedChannelBuilder
 import com.k1llerwhale.sonicsight.grpc.SonicSightServiceGrpcKt
@@ -10,9 +11,37 @@ object GrpcModule {
     // Default server address; override at runtime via setHost() (persisted in
     // SharedPreferences). Raw IP or hostname only, no scheme.
     private const val DEFAULT_HOST = "192.168.1.87"
-    private const val PORT = 50051 // gRPC port, not the FastAPI port
     private const val PREFS = "sonicsight_prefs"
     private const val KEY_HOST = "server_host"
+
+    // Locked transport constants (MU-401) — the single source the channel
+    // builder reads. Internal so tests pin the exact values used.
+    internal const val PORT = 50051 // gRPC port, not the FastAPI port
+    internal const val MAX_INBOUND_BYTES = 16 * 1024 * 1024 // 16MB
+    internal const val KEEPALIVE_TIME_SECONDS = 30L
+    internal const val KEEPALIVE_TIMEOUT_SECONDS = 10L
+
+    /** Seam S3 (docs/SEAMS.md): swappable host persistence for JVM tests. */
+    interface HostStore {
+        fun load(): String?
+        fun save(host: String)
+    }
+
+    @VisibleForTesting
+    internal var hostStoreOverride: HostStore? = null
+
+    /** Seam S3: swappable channel construction for JVM tests. */
+    @VisibleForTesting
+    internal var channelFactoryOverride: ((host: String, port: Int) -> ManagedChannel)? = null
+
+    /** Test hygiene only: restore pristine singleton state between tests. */
+    @VisibleForTesting
+    internal fun resetForTest() {
+        shutdown()
+        host = DEFAULT_HOST
+        hostStoreOverride = null
+        channelFactoryOverride = null
+    }
 
     @Volatile
     private var host: String = DEFAULT_HOST
@@ -22,8 +51,13 @@ object GrpcModule {
 
     /** Load the persisted host override. Call once, before first stub use. */
     fun init(context: Context) {
-        host = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_HOST, DEFAULT_HOST) ?: DEFAULT_HOST
+        val store = hostStoreOverride
+        host = if (store != null) {
+            store.load() ?: DEFAULT_HOST
+        } else {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_HOST, DEFAULT_HOST) ?: DEFAULT_HOST
+        }
     }
 
     fun currentHost(): String = host
@@ -35,8 +69,13 @@ object GrpcModule {
     fun setHost(context: Context, newHost: String) {
         val trimmed = newHost.trim()
         if (trimmed.isEmpty()) return
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_HOST, trimmed).apply()
+        val store = hostStoreOverride
+        if (store != null) {
+            store.save(trimmed)
+        } else {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putString(KEY_HOST, trimmed).apply()
+        }
         if (trimmed != host) {
             host = trimmed
             shutdown()
@@ -44,16 +83,19 @@ object GrpcModule {
     }
 
     @Synchronized
-    private fun channelInstance(): ManagedChannel {
+    @VisibleForTesting
+    internal fun channelInstance(): ManagedChannel {
         val existing = channel
         if (existing != null && !existing.isShutdown) return existing
-        val created = ManagedChannelBuilder.forAddress(host, PORT)
-            .usePlaintext() // Use insecure connection for development
-            .maxInboundMessageSize(16 * 1024 * 1024) // 16MB
-            .keepAliveTime(30, TimeUnit.SECONDS)
-            .keepAliveWithoutCalls(true)  // Detect dead connections even when idle
-            .keepAliveTimeout(10, TimeUnit.SECONDS)  // Fail fast on unresponsive server
-            .build()
+        val factory = channelFactoryOverride
+        val created = factory?.invoke(host, PORT)
+            ?: ManagedChannelBuilder.forAddress(host, PORT)
+                .usePlaintext() // Use insecure connection for development
+                .maxInboundMessageSize(MAX_INBOUND_BYTES)
+                .keepAliveTime(KEEPALIVE_TIME_SECONDS, TimeUnit.SECONDS)
+                .keepAliveWithoutCalls(true)  // Detect dead connections even when idle
+                .keepAliveTimeout(KEEPALIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS)  // Fail fast on unresponsive server
+                .build()
         channel = created
         return created
     }

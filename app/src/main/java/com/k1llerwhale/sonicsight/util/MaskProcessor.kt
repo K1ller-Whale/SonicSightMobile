@@ -9,6 +9,61 @@ import java.nio.ByteOrder
 import kotlin.math.pow
 
 class MaskProcessor {
+
+    companion object {
+        // ── Seam S7 (docs/SEAMS.md): pure pixel math extracted so MU-601
+        // asserts it on the JVM; the Bitmap wrappers below call these. ──
+
+        /** Grid dims from a wire byte count: exact square side, else the
+         *  (56,56) defaults — the fallback is a pinned characterization. */
+        internal fun inferHeatmapDims(byteCount: Int, defaultW: Int, defaultH: Int): Pair<Int, Int> {
+            val total = byteCount.coerceAtLeast(1)
+            val side = Math.sqrt(total.toDouble()).toInt().coerceAtLeast(1)
+            return if (side * side == total) side to side else defaultW to defaultH
+        }
+
+        /** Gamma-2.5 alpha curve, ceiling 200 (see createTransparentHeatmap KDoc). */
+        internal fun gammaAlpha(v: Float): Int =
+            (v.coerceIn(0f, 1f).toDouble().pow(2.5) * 200.0).toInt().coerceIn(0, 200)
+
+        internal fun blendRgb(a: Int, b: Int, t: Float): Int {
+            val ar = (a shr 16) and 0xFF; val ag = (a shr 8) and 0xFF; val ab = a and 0xFF
+            val br = (b shr 16) and 0xFF; val bg = (b shr 8) and 0xFF; val bb = b and 0xFF
+            val r = (ar + (br - ar) * t).toInt()
+            val g = (ag + (bg - ag) * t).toInt()
+            val bl = (ab + (bb - ab) * t).toInt()
+            return (r shl 16) or (g shl 8) or bl
+        }
+
+        /** ARGB cells for the pixel-mode overlay; null on invalid input. */
+        internal fun pixelOverlayArgb(
+            energyBytes: ByteArray,
+            gridWidth: Int,
+            gridHeight: Int,
+            labelBytes: ByteArray?,
+            clusterColors: Map<Int, Int>,
+        ): IntArray? {
+            if (gridWidth <= 0 || gridHeight <= 0) return null
+            val cellCount = gridWidth * gridHeight
+            if (energyBytes.size < cellCount) return null
+            val pixels = IntArray(cellCount)
+            val hasLabels = labelBytes != null && labelBytes.size >= cellCount
+            for (i in 0 until cellCount) {
+                val v = ((energyBytes[i].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
+                val alpha = gammaAlpha(v)
+                var rgb = MagmaPalette.color(v) and 0x00FFFFFF
+                if (hasLabels) {
+                    val label = labelBytes!![i].toInt() and 0xFF
+                    val tint = if (label != 255) clusterColors[label] else null
+                    if (tint != null) {
+                        rgb = blendRgb(rgb, tint and 0x00FFFFFF, 0.55f)
+                    }
+                }
+                pixels[i] = (alpha shl 24) or rgb
+            }
+            return pixels
+        }
+    }
     /**
      * Creates an overlay bitmap by combining a float32 heatmap and a center frame.
      * Used for full video processing (non-streaming).
@@ -105,10 +160,7 @@ class MaskProcessor {
         try {
             // Infer actual grid size from the byte count so the function works
             // with any resolution the server sends (56x56 = 3136 bytes currently).
-            val totalPixels = heatmapBytes.size.coerceAtLeast(1)
-            val inferredSide = Math.sqrt(totalPixels.toDouble()).toInt().coerceAtLeast(1)
-            val w = if (inferredSide * inferredSide == totalPixels) inferredSide else width
-            val h = if (inferredSide * inferredSide == totalPixels) inferredSide else height
+            val (w, h) = inferHeatmapDims(heatmapBytes.size, width, height)
             val pixelCount = w * h
 
             val heatmap = FloatArray(pixelCount)
@@ -127,9 +179,9 @@ class MaskProcessor {
                 // Gamma-2.5 curve: only high activations (genuine sound sources)
                 // become visible. Low values (background) are nearly transparent,
                 // avoiding the red haze that the old linear alpha produced.
-                // v=1.0 -> alpha=200, v=0.5 -> alpha=~18, v=0.3 -> alpha=~4
-                val alphaf = v.toDouble().pow(2.5) * 200.0
-                val alpha = alphaf.toInt().coerceIn(0, 200)
+                // Measured values (MU-601): v=1.0 -> alpha=200,
+                // v=0.5 -> alpha=35, v=0.3 -> alpha=9.
+                val alpha = gammaAlpha(v)
                 pixels[i] = (alpha shl 24) or (heatColor(v) and 0x00FFFFFF)
             }
 
@@ -164,26 +216,10 @@ class MaskProcessor {
         labelBytes: ByteArray? = null,
         clusterColors: Map<Int, Int> = emptyMap(),
     ): Bitmap? {
-        if (gridWidth <= 0 || gridHeight <= 0) return null
-        val cellCount = gridWidth * gridHeight
-        if (energyBytes.size < cellCount) return null
+        val pixels = pixelOverlayArgb(energyBytes, gridWidth, gridHeight, labelBytes, clusterColors)
+            ?: return null
         try {
             val bitmap = Bitmap.createBitmap(gridWidth, gridHeight, Bitmap.Config.ARGB_8888)
-            val pixels = IntArray(cellCount)
-            val hasLabels = labelBytes != null && labelBytes.size >= cellCount
-            for (i in 0 until cellCount) {
-                val v = ((energyBytes[i].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
-                val alpha = (v.toDouble().pow(2.5) * 200.0).toInt().coerceIn(0, 200)
-                var rgb = heatColor(v) and 0x00FFFFFF
-                if (hasLabels) {
-                    val label = labelBytes!![i].toInt() and 0xFF
-                    val tint = if (label != 255) clusterColors[label] else null
-                    if (tint != null) {
-                        rgb = blendRgb(rgb, tint and 0x00FFFFFF, 0.55f)
-                    }
-                }
-                pixels[i] = (alpha shl 24) or rgb
-            }
             bitmap.setPixels(pixels, 0, gridWidth, 0, 0, gridWidth, gridHeight)
             // Scale to a texture size the hardware layer maps cleanly; aspect
             // is preserved by the ImageView matrix, not here.
@@ -194,15 +230,6 @@ class MaskProcessor {
             e.printStackTrace()
             return null
         }
-    }
-
-    private fun blendRgb(a: Int, b: Int, t: Float): Int {
-        val ar = (a shr 16) and 0xFF; val ag = (a shr 8) and 0xFF; val ab = a and 0xFF
-        val br = (b shr 16) and 0xFF; val bg = (b shr 8) and 0xFF; val bb = b and 0xFF
-        val r = (ar + (br - ar) * t).toInt()
-        val g = (ag + (bg - ag) * t).toInt()
-        val bl = (ab + (bb - ab) * t).toInt()
-        return (r shl 16) or (g shl 8) or bl
     }
 
     // Heatmap colours come from the magma spectrogram palette: perceptually

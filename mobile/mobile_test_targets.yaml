@@ -107,6 +107,14 @@ reconciliations:
       address validation exists (MainActivity.kt:468-486) — recorded as a
       product gap (see D-M ledger), not a contradiction: the report claims
       only that the host is user-set and persisted.
+  - id: REC-5-addendum
+    row: server-address-validation
+    was: "REC-5 stated no server-address validation exists"
+    now: >
+      Refined 2026-08-14 pre-measurement: GrpcModule.setHost DOES trim and
+      reject empty/blank input (GrpcModule.kt); what does not exist is any
+      FORMAT validation (hostname/IP/port syntax). MU-707 characterizes
+      exactly that split.
   - id: REC-6
     row: FR-033
     was: "mobile pins speech burst cap 0.75 s vs designed 1.5 s"
@@ -468,21 +476,33 @@ targets:
     name: channel configuration constants
     requirement: locked constants (transport)
     tier: *jvm
-    method: unit; channel-factory seam captures builder parameters
-      (GrpcModule.kt:50-56)
-    oracle: source constants
-    gate: plaintext; port 50051; keepAliveTime 30 s;
-      keepAliveWithoutCalls true; keepAliveTimeout 10 s;
-      maxInboundMessageSize 16777216
+    method: >
+      unit; the internal transport constants the production builder reads
+      (seam S3) are pinned exactly. METHOD CORRECTED 2026-08-14
+      pre-measurement: builder-parameter capture is not observable
+      (ManagedChannelBuilder exposes no getters) and the in-process
+      transport enforces neither size caps nor keepalive — so the pinned
+      constants + the single builder call site that consumes them are the
+      testable surface off-device; plaintext/withoutCalls remain
+      source-pinned only.
+    oracle: source constants (GrpcModule.channelInstance)
+    gate: PORT 50051; MAX_INBOUND_BYTES 16777216; KEEPALIVE_TIME 30 s;
+      KEEPALIVE_TIMEOUT 10 s — exact; plaintext + keepAliveWithoutCalls
+      true stated as source-pinned, not measured
 
   - id: MU-402
     name: oversized inbound message -> RESOURCE_EXHAUSTED -> error state
     requirement: locked constant (16 MB cap)
     tier: *jvm
-    method: unit; in-process channel configured with the production cap;
-      fake server sends > 16 MiB result
-    oracle: gRPC status + UiState
-    gate: RESOURCE_EXHAUSTED raised; surfaces as UiState.Error, no crash
+    method: >
+      METHOD CORRECTED 2026-08-14 pre-measurement: the in-process transport
+      passes messages by reference without serialization, so inbound size
+      limits are NOT enforced there and the RESOURCE_EXHAUSTED effect is
+      not producible off-device. The cap's configured value is pinned in
+      MU-401; the effect is NOT MEASURED at unit level (would require a
+      socket transport, banned in JVM tests, or a device run).
+    oracle: none at unit level (see MU-401 for the configuration pin)
+    gate: recorded as not measured at unit level — no unit gate
 
   - id: MU-403
     name: status handling characterization — no typed mapping exists
@@ -531,13 +551,19 @@ targets:
     name: loss policy — audio lossless in-order, frames keep-latest drop
     requirement: locked constant (emitter loss policy)
     tier: *jvm
-    method: unit; single test, saturated 64-slot out-flow with slow
-      collector: sendAudioChunk suspends and delivers all in order;
-      sendStreamChunk tryEmit drops (MainViewModel.kt:250-265, buffer 64)
-    oracle: collected sequence
-    gate: 100% of audio chunks delivered in emission order; >=1 frame chunk
-      demonstrably dropped under saturation; no audio reordering.
-      (Sustained-saturation soak: DEFERRED)
+    method: >
+      METHOD CORRECTED 2026-08-14 pre-measurement, two tests: (a) audio
+      lossless in-order — 20 suspending sends against the in-process
+      server, all arrive in emission order; (b) policy shape — frame sends
+      are a non-suspending tryEmit (thousands of calls with no consumer
+      return synchronously and drop silently). The saturation-parking claim
+      for audio (emit suspends when the 64-slot queue fills) is NOT
+      MEASURED at unit level: the in-process transport enforces no flow
+      control, so the queue cannot saturate off-device.
+    oracle: server-side received sequence + API/flow semantics
+    gate: (a) 100% of audio chunks in order; (b) frame path returns
+      synchronously; audio-parking effect recorded as not measured at unit
+      level. (Sustained-saturation soak: DEFERRED)
 
   - id: MU-408
     name: host persistence round-trip

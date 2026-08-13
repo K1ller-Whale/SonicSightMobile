@@ -30,6 +30,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            // JaCoCo unit-test coverage (createDebugUnitTestCoverageReport).
+            enableUnitTestCoverage = true
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
@@ -64,8 +68,13 @@ dependencies {
     testImplementation("io.grpc:grpc-testing:1.62.2")
     testImplementation("io.grpc:grpc-inprocess:1.62.2")
     testImplementation("androidx.arch.core:core-testing:2.2.0")
+    // Single-SDK Robolectric as a unit-test enabler for bitmap-backed suites
+    // (MU-503/505/508/602). The multi-API Tier 0 matrix stays DEFERRED.
+    testImplementation("org.robolectric:robolectric:4.16")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    // MI-DEV probes: permission grant rule for camera/mic.
+    androidTestImplementation("androidx.test:rules:1.6.1")
     val cameraxVersion = "1.3.1"
 
     //CameraX (Video & Preview)
