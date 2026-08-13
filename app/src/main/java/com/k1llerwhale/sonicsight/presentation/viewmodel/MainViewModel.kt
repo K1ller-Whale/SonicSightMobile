@@ -13,6 +13,8 @@ import com.k1llerwhale.sonicsight.grpc.StreamChunk
 import com.k1llerwhale.sonicsight.grpc.StreamResult
 import com.k1llerwhale.sonicsight.util.MaskProcessor
 import com.k1llerwhale.sonicsight.util.MediaUtils
+import androidx.annotation.VisibleForTesting
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
@@ -41,9 +43,20 @@ enum class PlaybackMode {
     RIGHT_ONLY
 }
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
+/**
+ * Test seam S5 (docs/SEAMS.md): repository, dispatchers and clock are
+ * constructor-injected with production defaults. @JvmOverloads keeps the
+ * (Application)-only constructor the default ViewModelProvider factory
+ * needs, so the Activity's creation path is byte-for-byte unchanged.
+ */
+class MainViewModel @JvmOverloads constructor(
+    application: Application,
+    private val repository: GrpcVideoRepository = GrpcVideoRepository(),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val clock: () -> Long = System::currentTimeMillis,
+) : AndroidViewModel(application) {
 
-    private val repository = GrpcVideoRepository()
     private val maskProcessor = MaskProcessor()
 
     private val _uiState = MutableLiveData<UiState>(UiState.Idle)
@@ -264,8 +277,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         outStreamChunks.emit(chunk)
     }
 
-    private suspend fun handleStreamResult(response: StreamResult) {
-        val receiveTime = System.currentTimeMillis()
+    @VisibleForTesting
+    internal suspend fun handleStreamResult(response: StreamResult) {
+        val receiveTime = clock()
 
         // Drop results whose echoed model id does not match the current
         // selection — this is what discards in-flight results from a
@@ -278,7 +292,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (!response.success) {
-            withContext(Dispatchers.Main) {
+            withContext(mainDispatcher) {
                 _uiState.value = UiState.Error(response.errorMessage)
             }
             return
@@ -343,8 +357,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.centroidX, it.centroidY,
                     )
                 }
-                withContext(Dispatchers.Main) { _sources.value = infos }
-                withContext(Dispatchers.IO) {
+                withContext(mainDispatcher) { _sources.value = infos }
+                withContext(ioDispatcher) {
                     val colors = response.clustersList.associate { it.clusterId to it.rgb }
                     val overlay = maskProcessor.createPixelOverlay(
                         response.energyMap.toByteArray(),
@@ -355,7 +369,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     if (overlay != null) {
                         hasPixelOverlay = true
-                        withContext(Dispatchers.Main) { _streamResults.value = overlay }
+                        withContext(mainDispatcher) { _streamResults.value = overlay }
                     }
                 }
             }
@@ -363,8 +377,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Render visual heatmaps using LOCAL cached frame (transparent overlay)
-        withContext(Dispatchers.IO) {
-            val renderStart = System.currentTimeMillis()
+        withContext(ioDispatcher) {
+            val renderStart = clock()
 
             val profile = _currentProfile.value ?: ModelProfile.DEFAULT
             val heatmapCount =
@@ -375,16 +389,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // a confidence-gated model is the server's honest "no
                 // confident localization" — clear the overlay, keep the audio.
                 if (response.leftHeatmap.isEmpty) {
-                    withContext(Dispatchers.Main) { _noLocalization.value = true }
+                    withContext(mainDispatcher) { _noLocalization.value = true }
                     return@withContext
                 }
                 val overlay = maskProcessor.createTransparentHeatmap(response.leftHeatmap.toByteArray())
                 if (overlay != null) {
-                    val renderTime = System.currentTimeMillis() - renderStart
-                    withContext(Dispatchers.Main) {
+                    val renderTime = clock() - renderStart
+                    withContext(mainDispatcher) {
                         _noLocalization.value = false
                         _streamResults.value = overlay
-                        Log.d("SonicSightPerf", "Total Result Latency: ${System.currentTimeMillis() - receiveTime}ms (Render: ${renderTime}ms)")
+                        Log.d("SonicSightPerf", "Total Result Latency: ${clock() - receiveTime}ms (Render: ${renderTime}ms)")
                     }
                 }
                 return@withContext
@@ -400,11 +414,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Recycle intermediate bitmaps immediately to prevent memory leak
                 leftTransparent.recycle()
                 rightTransparent.recycle()
-                val renderTime = System.currentTimeMillis() - renderStart
-                withContext(Dispatchers.Main) {
+                val renderTime = clock() - renderStart
+                withContext(mainDispatcher) {
                     _noLocalization.value = false
                     _streamResults.value = stitched
-                    Log.d("SonicSightPerf", "Total Result Latency: ${System.currentTimeMillis() - receiveTime}ms (Render: ${renderTime}ms)")
+                    Log.d("SonicSightPerf", "Total Result Latency: ${clock() - receiveTime}ms (Render: ${renderTime}ms)")
                 }
             } else {
                 // Recycle if only one was created
@@ -423,7 +437,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             result.onSuccess { response ->
                 val context = getApplication<Application>().applicationContext
 
-                withContext(Dispatchers.IO) {
+                withContext(ioDispatcher) {
                     try {
                         // 1. Process Heatmap Overlays
                         // Note: Proto 'left_heatmap' becomes 'leftHeatmap' in Kotlin stub
@@ -437,7 +451,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
 
                         if (leftOverlay == null || rightOverlay == null) {
-                            withContext(Dispatchers.Main) {
+                            withContext(mainDispatcher) {
                                 _uiState.value = UiState.Error("Failed to process heatmap overlays")
                             }
                             return@withContext
@@ -464,7 +478,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             response.audioSampleRate
                         )
 
-                        withContext(Dispatchers.Main) {
+                        withContext(mainDispatcher) {
                             if (audio1 != null && audio2 != null) {
                                 _uiState.value = UiState.NavigationReady(heatmapFile, audio1, audio2)
                             } else {
@@ -472,7 +486,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     } catch (e: Exception) {
-                        withContext(Dispatchers.Main) {
+                        withContext(mainDispatcher) {
                             _uiState.value = UiState.Error("Post-processing error: ${e.message}")
                         }
                     }
