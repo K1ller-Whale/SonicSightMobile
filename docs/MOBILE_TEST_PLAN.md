@@ -22,14 +22,14 @@ all: the originating brief rows were written from a compressed project summary
 rather than from source; source is authoritative. Full corrected values in the
 YAML `reconciliations:` block.
 
-| Id | Row | Correction (summary) |
+| Id | Row | Correction (summary — values in the YAML only) |
 |---|---|---|
-| REC-1 | Jitter buffer | 1.5 s / 33075 B is ring **capacity** (rate-scaled: 66150 B @ 22050), not the prebuffer. Prebuffer is 200 ms adaptive → 500 ms ceiling. Two gates, two rows. |
-| REC-2 | Overlay | Per heatmap ×6 → 336×336; 672×336 only as the stitched halves pair; pixel mode grid×24. "×12 of 56" dropped. |
-| REC-3 | Proto comment | Proto states 22050 wire / 21000 internal — the "stale 21000 comment" row is obsolete. Pins kept (MU-801/MU-802). |
-| REC-4 | Cadence | 4 results/s (speech) is a server cadence; no client constant. Client sends 125 ms blocks on both profiles. Send tested as-is, receive characterized as-is. |
+| REC-1 | Jitter buffer | The brief's single figure was the ring **capacity**, not the prebuffer; the prebuffer is a separate, smaller, adaptive gate. Two gates, two rows. |
+| REC-2 | Overlay | Each map is scaled to a hard-coded fixed target (no "×12 of 56"); the wide overlay exists only as the stitched halves pair; pixel mode uses a per-cell multiplier. |
+| REC-3 | Proto comment | The "stale wire-rate comment" row is obsolete — the proto states the correct wire rate with the engine-internal rate noted as such. Pins kept (MU-801/MU-802). |
+| REC-4 | Cadence | The speech results-per-second figure is a server cadence; no client constant exists. Client block cadence is identical on both profiles. Send tested as-is, receive characterized as-is. |
 | REC-5 | MU-7xx assumptions | Real state set is Idle/Processing/Uploading/Streaming/Error/NavigationReady; persistence is SharedPreferences via GrpcModule (no SavedStateHandle); server-address validation does not exist — recorded as a gap, not a contradiction. |
-| REC-6 | FR-033 | Backend defect, misattributed to mobile. Removed from the mobile pinning set; negative result recorded as **D-M-1** in `MOBILE_DEFECTS.md`. |
+| REC-6 | FR-033 | Backend defect, misattributed to mobile — mobile negative result plus the located backend constant recorded as **D-M-1** in `MOBILE_DEFECTS.md`. Removed from the mobile pinning set. |
 
 ---
 
@@ -47,10 +47,10 @@ Method/oracle/gate: see the YAML entry with the same id.
 | MU-102 | FR-audio-decimation (passband) | U | JVM |
 | MU-103 | FR-audio-decimation (stopband floor) | U | JVM |
 | MU-104 | FR-audio-decimation (DC gain) | U | JVM |
-| MU-105 | FR-audio-decimation (group delay 60) | U | JVM |
+| MU-105 | FR-audio-decimation (group delay) | U | JVM |
 | MU-106 | FR-audio-decimation (state continuity) | U | JVM |
-| MU-107 | Locked constant 5512→1378 | U | JVM |
-| MU-108 | Locked constant ÷2 → 22050 | U | JVM |
+| MU-107 | Locked constant (capture-block arithmetic, halves) | U | JVM |
+| MU-108 | Locked constant (speech decimation path) | U | JVM |
 | MU-109 | Robustness (empty input) | U | JVM |
 | MU-110 | FR-audio-decimation (remainder carry) | U | JVM |
 | MU-111 | Defect-candidate (odd-byte truncation) | U | JVM |
@@ -65,7 +65,7 @@ Method/oracle/gate: see the YAML entry with the same id.
 |---|---|---|---|
 | MU-201 | REC-1 prebuffer | U | JVM |
 | MU-202 | REC-1 capacity + drop-oldest | U | JVM |
-| MU-203 | Drain contract (512 B) | U | JVM |
+| MU-203 | Drain-chunk contract | U | JVM |
 | MU-204 | Underrun silence insertion | U | JVM |
 | MU-205 | Adaptive prebuffer | U | JVM |
 | MU-206 | Defect-candidate (partial-drain zero pad) | U | JVM |
@@ -91,7 +91,7 @@ Method/oracle/gate: see the YAML entry with the same id.
 | Id | Requirement | Level | Tier |
 |---|---|---|---|
 | MU-401 | Locked constants (channel config) | U | JVM |
-| MU-402 | Locked constant (16 MB cap) | U | JVM (in-process gRPC) |
+| MU-402 | Locked constant (inbound size cap) | U | JVM (in-process gRPC) |
 | MU-403 | Characterization + defect-candidate (status handling) | U | JVM (in-process gRPC) |
 | MU-404 | Defect-candidate (CancellationException swallow) | U | JVM |
 | MU-405 | NFR-resource-hygiene (cancel propagation) | U | JVM (in-process gRPC) |
@@ -105,11 +105,11 @@ Method/oracle/gate: see the YAML entry with the same id.
 | Id | Requirement | Level | Tier |
 |---|---|---|---|
 | MU-501 | Locked constant (halves crop, landscape) | U | JVM |
-| MU-502 | **D2 pin** (24.6 % portrait retention) | U | JVM |
+| MU-502 | **D2 pin** (portrait FOV retention) | U | JVM |
 | MU-503 | FR-frame-pipeline (rotations) | UR | Robolectric |
-| MU-504 | Locked constant (letterbox 224×126+49) | U | JVM |
-| MU-505 | Locked constant (JPEG q90) | UR | Robolectric |
-| MU-506 | Locked constant (throttle 8/~30 fps) | U | JVM |
+| MU-504 | Locked constant (letterbox geometry) | U | JVM |
+| MU-505 | Locked constant (wire JPEG quality) | UR | Robolectric |
+| MU-506 | Locked constant (frame-throttle gate) | U | JVM |
 | MU-507 | Locked constant (keep-latest) | U | JVM |
 | MU-508 | Defect-discovery (stride matrix — expected failures) | UR | Robolectric |
 
@@ -117,9 +117,9 @@ Method/oracle/gate: see the YAML entry with the same id.
 
 | Id | Requirement | Level | Tier |
 |---|---|---|---|
-| MU-601 | Locked constant (56×56 uint8 decode) | UR | Robolectric |
+| MU-601 | Locked constant (heatmap wire decode) | UR | Robolectric |
 | MU-602 | REC-2 (render dimensions) | UR | Robolectric |
-| MU-603 | Locked constant (14×14 touch chain, boundaries) | U | JVM |
+| MU-603 | Locked constant (touch chain, cell boundaries) | U | JVM |
 | MU-604 | UC-touch (portrait / non-square grids) | U | JVM |
 | MU-605 | A2/A3 (freeze & pixel protocol) | U | JVM |
 | MU-606 | UI-correctness (MagmaPalette) | U | JVM |
@@ -143,7 +143,7 @@ Method/oracle/gate: see the YAML entry with the same id.
 | Id | Requirement | Level | Tier |
 |---|---|---|---|
 | MU-801 | **NFR-COMPAT-001** (proto SHA-256) | U | JVM |
-| MU-802 | Locked constant / REC-3 (22050 pin) | U | JVM |
+| MU-802 | Locked constant / REC-3 (speech wire-rate pin) | U | JVM |
 | MU-803 | NFR-COMPAT-001 (golden fixtures) | U | JVM |
 | MU-804 | Wire semantics pins | U | JVM |
 
@@ -168,8 +168,8 @@ phones is a matter of plugging them in.
 |---|---|---|
 | FR-006 | MU-705 | Characterization; known gap named in test + KDoc |
 | FR-P02 | MU-706 | Declared product gap, not a bug |
-| D2 | MU-502 | 24.6 % portrait FOV retention asserted |
-| ~~FR-033~~ | — | Removed per REC-6; see D-M-1 |
+| D2 | MU-502 | Portrait FOV retention asserted at the ledger's figure (value in YAML) |
+| ~~FR-033~~ | — | Removed per REC-6; backend anchor located — see D-M-1 |
 
 `imageProxyToBitmap` (MU-508 / MI-DEV-002) is **not** in the no-fix set: per
 owner decision the mobile no-fix rule protects no measured numbers. Sequence:
