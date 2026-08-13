@@ -13,6 +13,30 @@ import kotlin.math.roundToInt
 
 object ImageTransform {
 
+    // ── Seam S4 (docs/SEAMS.md): the pure geometry, extracted so the crop
+    // math (including the D2 portrait FOV loss) is JVM-assertable without
+    // bitmaps. The bitmap functions below call these — single source. ──
+
+    /** Dims after scaling the shortest edge to 256, aspect preserved. */
+    internal fun scaledDimsShortestEdge256(width: Int, height: Int): Pair<Int, Int> =
+        if (width < height) {
+            256 to (256.0f / width * height).toInt()
+        } else {
+            (256.0f / height * width).toInt() to 256
+        }
+
+    /** Top-left corner of the centered 224x224 crop. */
+    internal fun centerCrop224Origin(width: Int, height: Int): Pair<Int, Int> =
+        (width - 224) / 2 to (height - 224) / 2
+
+    /** Letterboxed content dims inside a dim x dim square, aspect preserved. */
+    internal fun letterboxContentDims(width: Int, height: Int, dim: Int = 224): Pair<Int, Int> {
+        val scale = dim.toFloat() / maxOf(width, height)
+        val w = (width * scale).roundToInt().coerceIn(1, dim)
+        val h = (height * scale).roundToInt().coerceIn(1, dim)
+        return w to h
+    }
+
     /**
      * Converts a CameraX ImageProxy (YUV_420_888) into an ARGB Bitmap.
      */
@@ -44,19 +68,7 @@ object ImageTransform {
      * Scales the smaller edge to 256, maintaining aspect ratio.
      */
     private fun scaleSmallestEdgeTo256(bitmap: Bitmap): Bitmap {
-        val width = bitmap.width
-        val height = bitmap.height
-
-        val scaledWidth: Int
-        val scaledHeight: Int
-
-        if (width < height) {
-            scaledWidth = 256
-            scaledHeight = (256.0f / width * height).toInt()
-        } else {
-            scaledHeight = 256
-            scaledWidth = (256.0f / height * width).toInt()
-        }
+        val (scaledWidth, scaledHeight) = scaledDimsShortestEdge256(bitmap.width, bitmap.height)
 
         val scaled = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
         if (scaled != bitmap) {
@@ -69,11 +81,7 @@ object ImageTransform {
      * Center crops a highly-specific 224x224 chunk from the scaled bitmap.
      */
     private fun centerCrop224(bitmap: Bitmap): Bitmap {
-        val width = bitmap.width
-        val height = bitmap.height
-
-        val startX = (width - 224) / 2
-        val startY = (height - 224) / 2
+        val (startX, startY) = centerCrop224Origin(bitmap.width, bitmap.height)
 
         val cropped = Bitmap.createBitmap(bitmap, startX, startY, 224, 224)
         if (cropped != bitmap) {
@@ -122,9 +130,7 @@ object ImageTransform {
      * top and bottom; portrait frames get grey columns instead).
      */
     fun letterboxAndCompress(bitmap: Bitmap, dim: Int = 224, quality: Int = 90): ByteArray {
-        val scale = dim.toFloat() / maxOf(bitmap.width, bitmap.height)
-        val w = (bitmap.width * scale).roundToInt().coerceIn(1, dim)
-        val h = (bitmap.height * scale).roundToInt().coerceIn(1, dim)
+        val (w, h) = letterboxContentDims(bitmap.width, bitmap.height, dim)
         val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
 
         val boxed = Bitmap.createBitmap(dim, dim, Bitmap.Config.ARGB_8888)

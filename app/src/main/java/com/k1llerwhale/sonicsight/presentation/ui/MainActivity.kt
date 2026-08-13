@@ -776,18 +776,18 @@ class MainActivity : AppCompatActivity() {
             .start()
     }
 
-    /** Map raw stream errors to copy that says what to do next. */
+    /** Map raw stream errors to copy that says what to do next. Seam S6:
+     *  the substring classification is pure (classifyStreamError, MU-403);
+     *  only the localized copy lives here. */
     private fun describeError(raw: String?): String {
         val msg = raw ?: ""
-        return when {
-            msg.contains("not loaded", ignoreCase = true) ||
-                msg.contains("Unknown model", ignoreCase = true) ->
+        return when (com.k1llerwhale.sonicsight.util.classifyStreamError(raw)) {
+            com.k1llerwhale.sonicsight.util.StreamErrorKind.MODEL_UNAVAILABLE ->
                 getString(R.string.error_model_unavailable, profile.displayName)
-            msg.contains("UNAVAILABLE", ignoreCase = true) ||
-                msg.contains("io exception", ignoreCase = true) ||
-                msg.contains("deadline", ignoreCase = true) ->
+            com.k1llerwhale.sonicsight.util.StreamErrorKind.SERVER_UNREACHABLE ->
                 getString(R.string.error_server_unreachable, GrpcModule.currentHost())
-            else -> getString(R.string.error_generic, msg.ifEmpty { "unknown error" })
+            com.k1llerwhale.sonicsight.util.StreamErrorKind.GENERIC ->
+                getString(R.string.error_generic, msg.ifEmpty { "unknown error" })
         }
     }
 
@@ -860,15 +860,15 @@ class MainActivity : AppCompatActivity() {
                 .build()
 
             // Throttle to the profile's frame rate (125 ms = 8 fps for
-            // sonicsight, ~33 ms = 30 fps for multisensory)
-            var lastAnalyzedTimestamp = 0L
-            val frameIntervalMs = profile.frameIntervalMs
+            // sonicsight, ~33 ms = 30 fps for multisensory). Seam S6: the
+            // gate arithmetic lives in ThrottleGate (JVM-tested, MU-506).
+            val throttleGate = com.k1llerwhale.sonicsight.util.ThrottleGate(
+                profile.frameIntervalMs
+            ) { SystemClock.elapsedRealtime() }
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                 perfFramesArrived++
-                val currentTimestamp = SystemClock.elapsedRealtime()
-                if (currentTimestamp - lastAnalyzedTimestamp >= frameIntervalMs) {
+                if (throttleGate.tryPass()) {
                     processImageProxy(imageProxy)
-                    lastAnalyzedTimestamp = currentTimestamp
                 }
                 imageProxy.close()
             }
