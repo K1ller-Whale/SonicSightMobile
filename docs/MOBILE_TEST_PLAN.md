@@ -182,7 +182,11 @@ test commits.
 ## Seams (approved 2026-08-13 — all eight)
 
 Each: minimal, behaviour-preserving, constructor-defaulted, own commit,
-logged in `SEAMS.md` with justification.
+logged in `SEAMS.md` with justification. **Introduced lazily** — each seam
+lands when its suite first needs it, not all eight up front. Execution
+order: MU-1xx and the pure MU-6xx/MU-305 suites first (AudioDecimator,
+ModelProfile, CoordinateMap, MagmaPalette need no seams), then seam-backed
+suites.
 
 1. `JitterBuffer` — `PcmSink` interface; pure ring/drain extraction; counters `internal @VisibleForTesting`
 2. `GrpcVideoRepository` — stub provider injection; `MODEL_METADATA_KEY` → internal
