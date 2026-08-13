@@ -22,7 +22,7 @@ meta:
   written: 2026-08-13
   repo: SonicSightMobile
   branch: test/mobile-suite
-  baseline_commit: 56a02a5
+  baseline_commit: c66cbf8  # was 56a02a5 before the 2026-08-13 history rewrite (commit-message cleanup; trees identical)
   build_versions:
     agp: 8.13.2
     gradle: "8.13"

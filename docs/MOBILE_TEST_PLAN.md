@@ -10,7 +10,9 @@ Single-source rule: gates, oracles and measurement conditions live in
 document references target ids and never restates a gate value. If a value
 here ever disagrees with the YAML, the YAML wins.
 
-Baseline: branch `test/mobile-suite` from `master` @ `56a02a5`.
+Baseline: branch `test/mobile-suite` from `master` @ `c66cbf8` (hash changed
+from `56a02a5` in the 2026-08-13 history rewrite — commit-message cleanup
+only, all file trees identical).
 Plan written: 2026-08-13.
 
 ---
