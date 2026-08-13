@@ -22,6 +22,13 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    testOptions {
+        // Android framework statics (android.util.Log, android.os.Process)
+        // return stub defaults on the JVM instead of throwing "not mocked" —
+        // required by the MU-2xx suite which exercises JitterBuffer off-device.
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
